@@ -7,6 +7,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <style>
 :root {
   --bg:#f4f5f7;--surface:#fff;--surface2:#f1f3f5;--surface3:#e9ecef;
@@ -510,106 +511,292 @@ function getCounters() {
 }
 
 // ── EXPORT EXCEL ──────────────────────────────────────────────────────────
-function exportExcelSession(session, scans, pl) {
+// ── Extraire la taille depuis le SKU (ex: ZIP-M-OG → M) ──
+function getTailleFromSku(sku, catalogueTaille) {
+  if (catalogueTaille) return catalogueTaille;
+  const SIZES = ['XXS','XS','S','M','L','XL','XXL','2XL','3XL','XXXL','TU','OS'];
+  const parts = (sku||'').toUpperCase().split('-');
+  for (const p of parts) { if (SIZES.includes(p)) return p; }
+  return 'TU';
+}
+
+async function exportExcelSession(session, scans, pl) {
   pl = pl || S.packingList || [];
-  const wb = XLSX.utils.book_new();
+
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Stock-Logistique';
+  wb.created = new Date();
+
+  // ── Styles helpers ──
+  const COLORS = {
+    headerBg:'1e3a5f', headerFg:'FFFFFF',
+    subBg:'dde3f0',    subFg:'1e3a5f',
+    okBg:'e2efda',     okFg:'276221',
+    missBg:'ffc7ce',   missFg:'9c0006',
+    surpBg:'ffeb9c',   surpFg:'7d5c00',
+    unknBg:'e2e8f0',   unknFg:'64748b',
+    totalBg:'f1f5f9',  totalFg:'1e3a5f',
+    infoBg:'f8fafc',   lblBg:'e2e8f0',
+    defBg:'fff3cd',    defFg:'856404',
+    white:'FFFFFF',
+  };
+
+  function fillSolid(argb) {
+    return {type:'pattern', pattern:'solid', fgColor:{argb:'FF'+argb}};
+  }
+  function fontStyle(argb, bold, sz) {
+    return {color:{argb:'FF'+argb}, bold:!!bold, size:sz||11, name:'Calibri'};
+  }
+  function border(style) {
+    style = style||'thin';
+    const s = {style, color:{argb:'FF'+COLORS.subFg}};
+    return {top:s, left:s, bottom:s, right:s};
+  }
+  function applyRow(row, fillColor, fontColor, bold, sz, center) {
+    row.eachCell({includeEmpty:true}, cell => {
+      cell.fill = fillSolid(fillColor);
+      cell.font = fontStyle(fontColor, bold, sz);
+      cell.border = border('thin');
+      cell.alignment = {horizontal: center?'center':'left', vertical:'middle', wrapText:false};
+    });
+  }
 
   // Grouper par nom produit
   const groups = {};
   scans.forEach(sc => {
     const key = sc.nom || sc.sku;
-    if (!groups[key]) groups[key] = {nom: key, variantes: []};
+    if (!groups[key]) groups[key] = {nom:key, variantes:[]};
     const plItem = pl.find(p => p.sku === sc.sku);
-    groups[key].variantes.push({...sc, attendu: sc.attendu || plItem?.attendu || 0});
+    const taille = getTailleFromSku(sc.sku, sc.taille);
+    groups[key].variantes.push({...sc, taille, attendu: sc.attendu||plItem?.attendu||0});
   });
   pl.forEach(p => {
-    const key = p.nom || p.sku;
-    if (!groups[key]) groups[key] = {nom: key, variantes: []};
-    if (!groups[key].variantes.find(v => v.sku === p.sku))
-      groups[key].variantes.push({sku:p.sku,nom:p.nom,taille:p.taille||'',cat:p.cat||'',qty_pos:0,qty_neg:0,attendu:p.attendu||0});
+    const key = p.nom||p.sku;
+    if (!groups[key]) groups[key] = {nom:key, variantes:[]};
+    if (!groups[key].variantes.find(v=>v.sku===p.sku)) {
+      const taille = getTailleFromSku(p.sku, p.taille);
+      groups[key].variantes.push({sku:p.sku,nom:p.nom,taille,cat:p.cat||'',qty_pos:0,qty_neg:0,attendu:p.attendu||0});
+    }
+  });
+  // Trier variantes par taille
+  const TAILLE_ORDER = ['XXS','XS','S','M','L','XL','XXL','2XL','3XL','TU','OS'];
+  Object.values(groups).forEach(g => {
+    g.variantes.sort((a,b) => {
+      const ai = TAILLE_ORDER.indexOf(a.taille?.toUpperCase());
+      const bi = TAILLE_ORDER.indexOf(b.taille?.toUpperCase());
+      return (ai===-1?99:ai) - (bi===-1?99:bi);
+    });
   });
 
-  // ── Feuille rapport ──
-  const modeLabel = MODES.find(m => m.id === session.mode)?.label || session.mode;
-  const plInfo = pl.length > 0 ? pl.length + ' références — ' + pl.reduce((a,p)=>a+(p.attendu||1),0) + ' articles attendus' : 'Aucune';
+  // ── FEUILLE RAPPORT ──
+  const ws = wb.addWorksheet('Rapport session', {views:[{showGridLines:false}]});
+  ws.columns = [
+    {width:10},{width:26},{width:22},{width:12},{width:10},{width:10},{width:10},{width:10},{width:16}
+  ];
 
-  const wsData = [];
-  wsData.push(['RAPPORT DE SESSION STOCK-LOGISTIQUE', '', '', '', '', '', '', '']);
-  wsData.push([]);
-  wsData.push(['Nom de la session', session.nom]);
-  wsData.push(['Date et heure', new Date(session.created_at).toLocaleString('fr-FR')]);
-  wsData.push(['Mode', modeLabel]);
-  wsData.push(['Packing list', plInfo]);
-  wsData.push([]);
+  const modeLabel = MODES.find(m=>m.id===session.mode)?.label||session.mode;
+  const plInfo = pl.length>0 ? pl.length+' références — '+pl.reduce((a,p)=>a+(p.attendu||1),0)+' articles attendus' : 'Aucune';
 
-  let gAttendu = 0, gScanné = 0, gManquants = 0, gSurplus = 0, gInconnus = 0;
+  // Titre
+  ws.addRow([]);
+  const titleRow = ws.addRow(['  RAPPORT DE SESSION — STOCK-LOGISTIQUE']);
+  ws.mergeCells(titleRow.number, 1, titleRow.number, 9);
+  titleRow.height = 28;
+  titleRow.getCell(1).fill = fillSolid(COLORS.headerBg);
+  titleRow.getCell(1).font = fontStyle(COLORS.headerFg, true, 14);
+  titleRow.getCell(1).alignment = {horizontal:'center', vertical:'middle'};
+  ws.addRow([]);
+
+  // Infos session
+  const infoRows = [
+    ['Nom de la session', session.nom],
+    ['Date et heure', new Date(session.created_at).toLocaleString('fr-FR')],
+    ['Mode', modeLabel],
+    ['Packing list', plInfo],
+  ];
+  infoRows.forEach(([label, val]) => {
+    const r = ws.addRow([label, val]);
+    r.height = 18;
+    r.getCell(1).fill = fillSolid(COLORS.lblBg);
+    r.getCell(1).font = fontStyle(COLORS.headerBg, true, 11);
+    r.getCell(1).border = border('thin');
+    r.getCell(2).fill = fillSolid(COLORS.infoBg);
+    r.getCell(2).font = fontStyle('334155', false, 11);
+    r.getCell(2).border = border('thin');
+    ws.mergeCells(r.number, 2, r.number, 9);
+  });
+  ws.addRow([]);
+  ws.addRow([]);
+
+  let gAttendu=0, gScanne=0, gManquants=0, gSurplus=0, gInconnus=0;
 
   Object.values(groups).forEach(g => {
-    const tAttendu = g.variantes.reduce((a,v) => a+(v.attendu||0), 0);
-    const tScanné  = g.variantes.reduce((a,v) => a+(v.qty_pos||0), 0);
-    const tNeg     = g.variantes.reduce((a,v) => a+(v.qty_neg||0), 0);
-    const tEcart   = tScanné - tAttendu;
-    const tDef     = S.defectueux.filter(d => g.variantes.some(v => v.sku === d.sku)).length;
-    gAttendu += tAttendu;
-    gScanné  += tScanné;
+    const tAttendu = g.variantes.reduce((a,v)=>a+(v.attendu||0),0);
+    const tScanne  = g.variantes.reduce((a,v)=>a+(v.qty_pos||0),0);
+    const tNeg     = g.variantes.reduce((a,v)=>a+(v.qty_neg||0),0);
+    const tEcart   = tScanne - tAttendu;
+    const tDef     = S.defectueux.filter(d=>g.variantes.some(v=>v.sku===d.sku)).length;
+    gAttendu += tAttendu; gScanne += tScanne;
 
     // En-tête produit
-    wsData.push(['PRODUIT : ' + g.nom.toUpperCase(), '', '', '', 'Attendu: '+(tAttendu||'—'), 'Scanné: '+tScanné, 'Ecart: '+(tEcart>=0?'+':'')+tEcart, tDef>0?tDef+' défectueux':'']);
-    // Colonnes
-    wsData.push(['Taille', 'Article', 'SKU', 'Categorie', 'Attendu', 'Scanne (+)', 'Retours (-)', 'Ecart', 'Statut']);
+    const prodRow = ws.addRow(['  ' + g.nom.toUpperCase()]);
+    ws.mergeCells(prodRow.number, 1, prodRow.number, 9);
+    prodRow.height = 22;
+    prodRow.getCell(1).fill = fillSolid(COLORS.headerBg);
+    prodRow.getCell(1).font = fontStyle(COLORS.headerFg, true, 12);
+    prodRow.getCell(1).border = border('medium');
+    prodRow.getCell(1).alignment = {horizontal:'left', vertical:'middle'};
 
-    g.variantes.forEach(v => {
-      const ecart = (v.qty_pos||0) - (v.attendu||0);
-      let statut;
-      if (!v.attendu && (v.qty_pos||0)>0) { statut = 'Non attendu'; gInconnus++; }
-      else if (ecart === 0 && v.attendu)   { statut = 'OK'; }
-      else if (ecart > 0)                  { statut = 'Surplus (+'+ecart+')'; gSurplus++; }
-      else                                 { statut = 'Manquant ('+ecart+')'; gManquants++; }
-      wsData.push([v.taille||'—', v.nom||v.sku, v.sku, v.cat||'—', v.attendu||'—', v.qty_pos||0, v.qty_neg||0, (ecart>=0?'+':'')+ecart, statut]);
+    // Ligne résumé produit
+    const sumRow = ws.addRow([
+      '', 'Attendu: '+(tAttendu||0), '', '', '',
+      'Scanne: '+tScanne, '', 'Ecart: '+(tEcart>=0?'+':'')+tEcart,
+      tDef>0?tDef+' defectueux':''
+    ]);
+    sumRow.height = 16;
+    sumRow.eachCell({includeEmpty:true}, cell => {
+      cell.fill = fillSolid('eef2ff');
+      cell.font = fontStyle(COLORS.headerBg, true, 10);
+      cell.border = border('thin');
+      cell.alignment = {horizontal:'center', vertical:'middle'};
     });
 
-    // Total produit
-    wsData.push(['TOTAL', '', '', '', tAttendu||'—', tScanné, tNeg, (tEcart>=0?'+':'')+tEcart, tDef>0?tDef+' def.':'OK']);
-    wsData.push([]);
+    // En-têtes colonnes
+    const hdrs = ['Taille','Nom du produit','SKU','Categorie','Attendu','Scanne (+)','Retours (-)','Ecart','Statut'];
+    const hdrRow = ws.addRow(hdrs);
+    hdrRow.height = 18;
+    applyRow(hdrRow, COLORS.subBg, COLORS.subFg, true, 11, true);
+
+    // Lignes variantes
+    g.variantes.forEach(v => {
+      const ecart = (v.qty_pos||0) - (v.attendu||0);
+      let statut, bg, fg;
+      if (!v.attendu && (v.qty_pos||0)>0) { statut='Non attendu'; bg=COLORS.unknBg; fg=COLORS.unknFg; gInconnus++; }
+      else if (ecart===0 && v.attendu)     { statut='✓ OK';        bg=COLORS.okBg;   fg=COLORS.okFg; }
+      else if (ecart>0)                    { statut='▲ Surplus';   bg=COLORS.surpBg; fg=COLORS.surpFg; gSurplus++; }
+      else                                 { statut='▼ Manquant';  bg=COLORS.missBg; fg=COLORS.missFg; gManquants++; }
+      const vRow = ws.addRow([
+        v.taille||'TU', v.nom||v.sku, v.sku, v.cat||'',
+        v.attendu||0, v.qty_pos||0, v.qty_neg||0,
+        (ecart>=0?'+':'')+ecart, statut
+      ]);
+      vRow.height = 18;
+      vRow.eachCell({includeEmpty:true}, (cell, col) => {
+        cell.fill = fillSolid(bg);
+        cell.font = fontStyle(fg, col===9, 11);
+        cell.border = border('thin');
+        cell.alignment = {horizontal: col<=2?'left':'center', vertical:'middle'};
+      });
+    });
+
+    // Ligne TOTAL
+    const totRow = ws.addRow([
+      'TOTAL', '', '', '',
+      tAttendu||0, tScanne, tNeg,
+      (tEcart>=0?'+':'')+tEcart,
+      tDef>0?tDef+' def.':''
+    ]);
+    ws.mergeCells(totRow.number, 1, totRow.number, 4);
+    totRow.height = 18;
+    totRow.eachCell({includeEmpty:true}, (cell, col) => {
+      cell.fill = fillSolid(COLORS.totalBg);
+      cell.font = fontStyle(COLORS.totalFg, true, 11);
+      cell.border = border('medium');
+      cell.alignment = {horizontal: col===1?'left':'center', vertical:'middle'};
+    });
+    // Couleur écart total
+    const ecartCell = totRow.getCell(8);
+    ecartCell.font = fontStyle(tEcart===0?COLORS.okFg:tEcart>0?COLORS.surpFg:COLORS.missFg, true, 11);
+
+    ws.addRow([]);
+    ws.addRow([]);
   });
 
   // Résumé global
-  const gEcart = gScanné - gAttendu;
-  wsData.push(['RESUME DE SESSION', '', '', '', '', '', '', '']);
-  wsData.push(['Total articles scannes', gScanné]);
-  wsData.push(['Articles en surplus', gSurplus]);
-  wsData.push(['Articles manquants', gManquants]);
-  wsData.push(['Articles inconnus (hors liste)', gInconnus]);
-  wsData.push(['Statut global', gManquants===0&&gSurplus===0&&gInconnus===0?'Conforme':'Ecarts (manquants + surplus)']);
+  const globOk = gManquants===0&&gSurplus===0&&gInconnus===0;
+  const resumeTitle = ws.addRow(['  RESUME DE SESSION']);
+  ws.mergeCells(resumeTitle.number, 1, resumeTitle.number, 9);
+  resumeTitle.height = 22;
+  resumeTitle.getCell(1).fill = fillSolid(COLORS.headerBg);
+  resumeTitle.getCell(1).font = fontStyle(COLORS.headerFg, true, 12);
+  resumeTitle.getCell(1).border = border('medium');
+  resumeTitle.getCell(1).alignment = {horizontal:'center', vertical:'middle'};
 
-  const ws = XLSX.utils.aoa_to_sheet(wsData);
-  ws['!cols'] = [{wch:10},{wch:24},{wch:20},{wch:12},{wch:9},{wch:10},{wch:10},{wch:9},{wch:16}];
-  XLSX.utils.book_append_sheet(wb, ws, 'Rapport session');
+  const resumeData = [
+    ['Total articles scannes', gScanne, ''],
+    ['Articles en surplus', gSurplus, ''],
+    ['Articles manquants', gManquants, ''],
+    ['Articles inconnus (hors liste)', gInconnus, ''],
+    ['Statut global', globOk?'✓ Conforme':'Ecarts detectes', ''],
+  ];
+  resumeData.forEach(([label, val]) => {
+    const r = ws.addRow([label, val]);
+    ws.mergeCells(r.number, 1, r.number, 7);
+    ws.mergeCells(r.number, 8, r.number, 9);
+    r.height = 18;
+    r.getCell(1).fill = fillSolid(COLORS.lblBg);
+    r.getCell(1).font = fontStyle(COLORS.headerBg, true, 11);
+    r.getCell(1).border = border('thin');
+    r.getCell(1).alignment = {vertical:'middle'};
+    r.getCell(8).fill = fillSolid(COLORS.infoBg);
+    r.getCell(8).font = fontStyle('334155', false, 11);
+    r.getCell(8).border = border('thin');
+    r.getCell(8).alignment = {horizontal:'center', vertical:'middle'};
+  });
+  // Couleur statut global
+  const lastR = ws.lastRow;
+  if (lastR) {
+    lastR.getCell(8).fill = fillSolid(globOk?COLORS.okBg:COLORS.missBg);
+    lastR.getCell(8).font = fontStyle(globOk?COLORS.okFg:COLORS.missFg, true, 11);
+  }
 
-  // ── Non attendus ──
-  const nonAttendu = scans.filter(sc => pl.length>0 && !pl.find(p=>p.sku===sc.sku) && sc.qty_pos>0);
+  // ── FEUILLE NON ATTENDUS ──
+  const nonAttendu = scans.filter(sc=>pl.length>0&&!pl.find(p=>p.sku===sc.sku)&&sc.qty_pos>0);
   if (nonAttendu.length) {
-    const naData = [['Produit','Taille','SKU','Quantite scannee']];
-    nonAttendu.forEach(sc => naData.push([sc.nom||sc.sku, sc.taille||'—', sc.sku, sc.qty_pos]));
-    const wsNA = XLSX.utils.aoa_to_sheet(naData);
-    wsNA['!cols'] = [{wch:28},{wch:10},{wch:22},{wch:16}];
-    XLSX.utils.book_append_sheet(wb, wsNA, 'Non attendus');
-  }
-
-  // ── Défectueux ──
-  const defSession = S.defectueux.filter(d => d.session_id === session.id);
-  if (defSession.length) {
-    const defData = [['Produit','Taille','SKU','Type de defaut','Note','Date']];
-    defSession.forEach(d => {
-      const cat = S.catalogue.find(c => c.sku === d.sku);
-      defData.push([d.nom||d.sku, cat?.taille||'—', d.sku, d.type_defaut, d.note||'', new Date(d.created_at).toLocaleString('fr-FR')]);
+    const ws2 = wb.addWorksheet('Non attendus', {views:[{showGridLines:false}]});
+    ws2.columns = [{width:28},{width:12},{width:22},{width:16}];
+    const t2 = ws2.addRow(['Articles non attendus (hors packing list)']);
+    ws2.mergeCells(1,1,1,4); t2.height=22;
+    t2.getCell(1).fill=fillSolid(COLORS.surpBg); t2.getCell(1).font=fontStyle(COLORS.surpFg,true,12);
+    t2.getCell(1).border=border('medium'); t2.getCell(1).alignment={horizontal:'center',vertical:'middle'};
+    const h2 = ws2.addRow(['Produit','Taille','SKU','Quantite scannee']);
+    h2.height=18; applyRow(h2,COLORS.subBg,COLORS.subFg,true,11,true);
+    nonAttendu.forEach(sc=>{
+      const taille = getTailleFromSku(sc.sku, sc.taille);
+      const r=ws2.addRow([sc.nom||sc.sku, taille, sc.sku, sc.qty_pos]);
+      r.height=18; applyRow(r,COLORS.surpBg,COLORS.surpFg,false,11,false);
+      r.getCell(3).alignment={horizontal:'center',vertical:'middle'};
+      r.getCell(4).alignment={horizontal:'center',vertical:'middle'};
     });
-    const wsDef = XLSX.utils.aoa_to_sheet(defData);
-    wsDef['!cols'] = [{wch:28},{wch:10},{wch:22},{wch:18},{wch:30},{wch:18}];
-    XLSX.utils.book_append_sheet(wb, wsDef, 'Defectueux');
   }
 
-  XLSX.writeFile(wb, 'Stock-Logistique_'+session.nom.replace(/[^a-zA-Z0-9]/g,'_')+'_'+new Date().toISOString().split('T')[0]+'.xlsx');
+  // ── FEUILLE DÉFECTUEUX ──
+  const defSession = S.defectueux.filter(d=>d.session_id===session.id);
+  if (defSession.length) {
+    const ws3 = wb.addWorksheet('Defectueux', {views:[{showGridLines:false}]});
+    ws3.columns = [{width:28},{width:12},{width:22},{width:18},{width:30},{width:16}];
+    const t3 = ws3.addRow(['Articles defectueux']);
+    ws3.mergeCells(1,1,1,6); t3.height=22;
+    t3.getCell(1).fill=fillSolid(COLORS.missBg); t3.getCell(1).font=fontStyle(COLORS.missFg,true,12);
+    t3.getCell(1).border=border('medium'); t3.getCell(1).alignment={horizontal:'center',vertical:'middle'};
+    const h3=ws3.addRow(['Produit','Taille','SKU','Type de defaut','Note','Date']);
+    h3.height=18; applyRow(h3,COLORS.subBg,COLORS.subFg,true,11,true);
+    defSession.forEach(d=>{
+      const cat=S.catalogue.find(c=>c.sku===d.sku);
+      const taille=getTailleFromSku(d.sku, cat?.taille);
+      const r=ws3.addRow([d.nom||d.sku,taille,d.sku,d.type_defaut,d.note||'',new Date(d.created_at).toLocaleDateString('fr-FR')]);
+      r.height=18; applyRow(r,COLORS.missBg,COLORS.missFg,false,11,false);
+    });
+  }
+
+  // ── TÉLÉCHARGEMENT ──
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'Stock-Logistique_'+session.nom.replace(/[^a-zA-Z0-9]/g,'_')+'_'+new Date().toISOString().split('T')[0]+'.xlsx';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
 }
 function exportExcelAll() {
   const wb = XLSX.utils.book_new();
@@ -794,6 +981,22 @@ function renderScanner() {
           h('div', {class: 'cbox-lbl'}, '🔍 Inconnus / Non reconnus')
         )
       ),
+      // Tableau articles inconnus si il y en a
+      (() => {
+        const inconsList = S.scans.filter(sc => !S.catalogue.find(p => p.sku === sc.sku) && (sc.qty_pos||0) > 0);
+        if (!inconsList.length) return null;
+        return h('div', {class: 'sb-section'},
+          h('div', {class: 'sb-label', style: 'color:#7c3aed'}, '🔍 Articles inconnus (' + inconsList.length + ')'),
+          h('div', {style: 'max-height:160px;overflow-y:auto'},
+            ...inconsList.map(sc => h('div', {style: 'display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px'},
+              h('div', {style: 'flex:1;overflow:hidden'},
+                h('div', {style: 'font-family:var(--mono);font-size:11px;color:#7c3aed;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'}, sc.sku),
+              ),
+              h('span', {style: 'background:#f5f3ff;color:#7c3aed;border:1px solid #c4b5fd;border-radius:4px;padding:1px 7px;font-weight:700;font-size:12px;flex-shrink:0;margin-left:6px'}, sc.qty_pos)
+            ))
+          )
+        );
+      })(),
       session && history.length ? h('button', {class: 'btn btn-ghost btn-sm', style: 'margin-top:8px;width:100%', onClick: undoLast}, '↩ Annuler dernier scan') : null
     ),
     h('div', {class: 'sb-section', style: 'flex:1'},
