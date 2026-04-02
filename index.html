@@ -122,6 +122,19 @@ label{font-size:11px;font-weight:600;color:var(--muted);display:block;margin-bot
 .cbox.red .cbox-val{color:var(--red)}
 .cbox.orange{background:var(--orange-light);border-color:var(--orange-border)}
 .cbox.orange .cbox-val{color:var(--orange)}
+.cbox.purple{background:#f5f3ff;border-color:#c4b5fd}
+.cbox.purple .cbox-val{color:#7c3aed}
+/* Boutons +/- inline sur tableau */
+.inline-qty{display:flex;align-items:center;gap:4px}
+.iqty-btn{width:22px;height:22px;border-radius:4px;border:1px solid var(--border2);background:var(--surface);cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;transition:.15s;flex-shrink:0;line-height:1;font-weight:600}
+.iqty-btn:hover{border-color:var(--acc);color:var(--acc);background:var(--acc-light)}
+.iqty-val{font-family:var(--mono);font-weight:700;font-size:14px;min-width:24px;text-align:center}
+/* Row inconnue */
+.row-inconnu td{background:#faf5ff !important}
+.row-inconnu:hover td{background:#f5f3ff !important}
+/* Toast inconnu */
+.toast-inconnu{position:fixed;bottom:24px;right:24px;background:#7c3aed;color:#fff;padding:10px 16px;border-radius:var(--radius);font-size:13px;font-weight:500;box-shadow:var(--shadow-md);z-index:999;animation:slideIn .25s ease-out}
+@keyframes slideIn{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
 
 /* Topbar */
 .main-topbar{padding:10px 16px;border-bottom:1px solid var(--border);background:var(--surface);display:flex;align-items:center;justify-content:space-between;flex-shrink:0;flex-wrap:wrap;gap:8px}
@@ -251,7 +264,16 @@ label{font-size:11px;font-weight:600;color:var(--muted);display:block;margin-bot
 .close-opt-sub{font-size:12px;color:var(--muted)}
 
 /* RETOURS */
-.retour-mode-btns{display:flex;gap:8px;margin-bottom:14px}
+
+/* GROUPE CATALOGUE / SESSION */
+.group-hd{display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;background:var(--surface2);border-bottom:1px solid var(--border);font-weight:600;font-size:13px;color:var(--text);user-select:none}
+.group-hd:hover{background:var(--surface3)}
+.group-arrow{font-size:11px;color:var(--muted);margin-left:auto}
+.group-variant{background:var(--surface);border-bottom:1px solid var(--border)}
+.group-variant td{padding:8px 14px;font-size:13px;color:var(--text2)}
+.group-variant:last-child td{border-bottom:none}
+.group-variant:hover td{background:var(--acc-light)}
+.group-total{font-family:var(--mono);font-size:12px;font-weight:600}
 
 @media(max-width:768px){
   .scanner-sidebar{width:100%;border-right:none;border-bottom:1px solid var(--border);max-height:55vh}
@@ -307,24 +329,18 @@ let S = {
   mConfirmClose: false,
   closeOption: 'save',
   mEditScan: null,
-  mRetours: false,
   // Packing builder
   plItems: [],
   plSearch: '',
   plSuggest: [],
-  // Retours
-  retourMode: 'libre',
-  retourScans: [],
-  retourListText: '',
-  retourList: [],
-  retourInput: '',
-  retourFeedback: null,
+
   // UI
   expandedSession: null,
   searchCat: '',
   searchSess: '',
   loadingSess: false,
   loadingDef: false,
+  expandedGroups: {}, // {groupKey: bool} pour catalogue et sessions
 };
 
 function set(patch) { Object.assign(S, patch); render(); }
@@ -370,6 +386,17 @@ async function dbSaveDefect(sku, nom, type, note, sessionId) {
 }
 
 // ── SCAN ──────────────────────────────────────────────────────────────────
+function showToastInconnu(msg) {
+  const existing = document.getElementById('toastInconnu');
+  if (existing) existing.remove();
+  const toast = document.createElement('div');
+  toast.id = 'toastInconnu';
+  toast.className = 'toast-inconnu';
+  toast.textContent = '🔍 ' + msg;
+  document.body.appendChild(toast);
+  setTimeout(() => { toast.style.opacity='0'; toast.style.transition='opacity .3s'; setTimeout(() => toast.remove(), 300); }, 4000);
+}
+
 function doScan(rawSku, delta = 1) {
   if (!S.session) {
     set({scanFeedback: {type: 'err', msg: '❌ Aucune session active — démarrez une session'}});
@@ -389,7 +416,11 @@ function doScan(rawSku, delta = 1) {
   else sc.qty_neg = (sc.qty_neg || 0) + Math.abs(delta);
   dbUpsertScan(S.session.id, sc);
   let type = 'ok', msg = '';
-  if (!produit) { type = 'warn'; msg = '⚠ SKU inconnu : ' + sku; }
+  if (!produit) {
+    type = 'warn'; msg = '⚠ SKU inconnu : ' + sku;
+    // Toast article inconnu
+    showToastInconnu('Article non reconnu — vérifiez le SKU ou modifiez manuellement : ' + sku);
+  }
   else if (S.packingList && !plItem) { type = 'warn'; msg = '⚠ ' + produit.nom + ' — non attendu'; }
   else msg = (delta > 0 ? '+' + delta : delta) + ' × ' + (produit?.nom || sku);
   S.history.unshift({sku, nom: produit?.nom || sku, delta, time: new Date().toLocaleTimeString('fr-FR', {hour:'2-digit',minute:'2-digit',second:'2-digit'})});
@@ -421,7 +452,7 @@ function clearFB() {
 async function startSession() {
   const nom = S.sessionName.trim() || ('Session du ' + new Date().toLocaleDateString('fr-FR'));
   const data = await dbStartSession(nom, S.mode);
-  if (data) set({session: data, scans: [], history: [], packingList: null, scanFeedback: null, sessionName: ''});
+  if (data) set({session: data, scans: [], history: [], scanFeedback: null, sessionName: ''});
 }
 
 async function closeSession() {
@@ -491,76 +522,95 @@ function exportExcelSession(session, scans, pl) {
     const plItem = pl.find(p => p.sku === sc.sku);
     groups[key].variantes.push({...sc, attendu: sc.attendu || plItem?.attendu || 0});
   });
-  // Ajouter items PL non scannés
   pl.forEach(p => {
     const key = p.nom || p.sku;
     if (!groups[key]) groups[key] = {nom: key, variantes: []};
-    if (!groups[key].variantes.find(v => v.sku === p.sku)) {
-      groups[key].variantes.push({sku: p.sku, nom: p.nom, taille: p.taille || '', qty_pos: 0, qty_neg: 0, attendu: p.attendu || 0});
-    }
+    if (!groups[key].variantes.find(v => v.sku === p.sku))
+      groups[key].variantes.push({sku:p.sku,nom:p.nom,taille:p.taille||'',cat:p.cat||'',qty_pos:0,qty_neg:0,attendu:p.attendu||0});
   });
 
-  // ── Feuille Résumé ──
+  // ── Feuille rapport ──
+  const modeLabel = MODES.find(m => m.id === session.mode)?.label || session.mode;
+  const plInfo = pl.length > 0 ? pl.length + ' références — ' + pl.reduce((a,p)=>a+(p.attendu||1),0) + ' articles attendus' : 'Aucune';
+
   const wsData = [];
-  wsData.push(['SESSION', session.nom, '', 'Mode', session.mode, 'Date', new Date(session.created_at).toLocaleDateString('fr-FR')]);
+  wsData.push(['RAPPORT DE SESSION STOCK-LOGISTIQUE', '', '', '', '', '', '', '']);
+  wsData.push([]);
+  wsData.push(['Nom de la session', session.nom]);
+  wsData.push(['Date et heure', new Date(session.created_at).toLocaleString('fr-FR')]);
+  wsData.push(['Mode', modeLabel]);
+  wsData.push(['Packing list', plInfo]);
   wsData.push([]);
 
-  let gTotalAttendu = 0, gTotalScanné = 0;
+  let gAttendu = 0, gScanné = 0, gManquants = 0, gSurplus = 0, gInconnus = 0;
 
   Object.values(groups).forEach(g => {
-    const tAttendu = g.variantes.reduce((a, v) => a + (v.attendu || 0), 0);
-    const tScanné = g.variantes.reduce((a, v) => a + (v.qty_pos || 0), 0);
-    const tEcart = tScanné - tAttendu;
-    const tDef = S.defectueux.filter(d => g.variantes.some(v => v.sku === d.sku)).length;
-    gTotalAttendu += tAttendu;
-    gTotalScanné += tScanné;
+    const tAttendu = g.variantes.reduce((a,v) => a+(v.attendu||0), 0);
+    const tScanné  = g.variantes.reduce((a,v) => a+(v.qty_pos||0), 0);
+    const tNeg     = g.variantes.reduce((a,v) => a+(v.qty_neg||0), 0);
+    const tEcart   = tScanné - tAttendu;
+    const tDef     = S.defectueux.filter(d => g.variantes.some(v => v.sku === d.sku)).length;
+    gAttendu += tAttendu;
+    gScanné  += tScanné;
 
-    wsData.push(['PRODUIT : ' + g.nom, '', '', '', 'Total attendu', 'Total scanné', 'Écart', 'Défectueux']);
-    wsData.push(['', '', '', '', tAttendu || '—', tScanné, (tEcart >= 0 ? '+' : '') + tEcart, tDef]);
-    wsData.push([]);
-    wsData.push(['SKU', 'Taille', 'Attendu', 'Scanné (+)', 'Retours (-)', 'Écart net', 'Statut']);
+    // En-tête produit
+    wsData.push(['PRODUIT : ' + g.nom.toUpperCase(), '', '', '', 'Attendu: '+(tAttendu||'—'), 'Scanné: '+tScanné, 'Ecart: '+(tEcart>=0?'+':'')+tEcart, tDef>0?tDef+' défectueux':'']);
+    // Colonnes
+    wsData.push(['Taille', 'Article', 'SKU', 'Categorie', 'Attendu', 'Scanne (+)', 'Retours (-)', 'Ecart', 'Statut']);
+
     g.variantes.forEach(v => {
-      const ecart = (v.qty_pos || 0) - (v.attendu || 0);
-      const statut = v.attendu ? (ecart === 0 ? '✓ OK' : ecart > 0 ? '▲ Surplus' : '▼ Manquant') : '— Non attendu';
-      wsData.push([v.sku, v.taille || '—', v.attendu || '—', v.qty_pos || 0, v.qty_neg || 0, (ecart >= 0 ? '+' : '') + ecart, statut]);
+      const ecart = (v.qty_pos||0) - (v.attendu||0);
+      let statut;
+      if (!v.attendu && (v.qty_pos||0)>0) { statut = 'Non attendu'; gInconnus++; }
+      else if (ecart === 0 && v.attendu)   { statut = 'OK'; }
+      else if (ecart > 0)                  { statut = 'Surplus (+'+ecart+')'; gSurplus++; }
+      else                                 { statut = 'Manquant ('+ecart+')'; gManquants++; }
+      wsData.push([v.taille||'—', v.nom||v.sku, v.sku, v.cat||'—', v.attendu||'—', v.qty_pos||0, v.qty_neg||0, (ecart>=0?'+':'')+ecart, statut]);
     });
+
+    // Total produit
+    wsData.push(['TOTAL', '', '', '', tAttendu||'—', tScanné, tNeg, (tEcart>=0?'+':'')+tEcart, tDef>0?tDef+' def.':'OK']);
     wsData.push([]);
   });
 
-  // Total global
-  const gEcart = gTotalScanné - gTotalAttendu;
-  wsData.push(['TOTAL GLOBAL', '', '', '', gTotalAttendu, gTotalScanné, (gEcart >= 0 ? '+' : '') + gEcart, '']);
+  // Résumé global
+  const gEcart = gScanné - gAttendu;
+  wsData.push(['RESUME DE SESSION', '', '', '', '', '', '', '']);
+  wsData.push(['Total articles scannes', gScanné]);
+  wsData.push(['Articles en surplus', gSurplus]);
+  wsData.push(['Articles manquants', gManquants]);
+  wsData.push(['Articles inconnus (hors liste)', gInconnus]);
+  wsData.push(['Statut global', gManquants===0&&gSurplus===0&&gInconnus===0?'Conforme':'Ecarts (manquants + surplus)']);
 
   const ws = XLSX.utils.aoa_to_sheet(wsData);
-  ws['!cols'] = [{wch:28},{wch:8},{wch:10},{wch:12},{wch:12},{wch:10},{wch:14}];
-  XLSX.utils.book_append_sheet(wb, ws, 'Résumé');
+  ws['!cols'] = [{wch:10},{wch:24},{wch:20},{wch:12},{wch:9},{wch:10},{wch:10},{wch:9},{wch:16}];
+  XLSX.utils.book_append_sheet(wb, ws, 'Rapport session');
 
-  // ── Feuille Non attendus ──
-  const nonAttendu = scans.filter(sc => pl.length > 0 && !pl.find(p => p.sku === sc.sku) && sc.qty_pos > 0);
+  // ── Non attendus ──
+  const nonAttendu = scans.filter(sc => pl.length>0 && !pl.find(p=>p.sku===sc.sku) && sc.qty_pos>0);
   if (nonAttendu.length) {
-    const naData = [['Produit', 'Variante/Taille', 'SKU', 'Quantité scannée']];
-    nonAttendu.forEach(sc => naData.push([sc.nom || sc.sku, sc.taille || '—', sc.sku, sc.qty_pos]));
+    const naData = [['Produit','Taille','SKU','Quantite scannee']];
+    nonAttendu.forEach(sc => naData.push([sc.nom||sc.sku, sc.taille||'—', sc.sku, sc.qty_pos]));
     const wsNA = XLSX.utils.aoa_to_sheet(naData);
-    wsNA['!cols'] = [{wch:28},{wch:12},{wch:22},{wch:16}];
+    wsNA['!cols'] = [{wch:28},{wch:10},{wch:22},{wch:16}];
     XLSX.utils.book_append_sheet(wb, wsNA, 'Non attendus');
   }
 
-  // ── Feuille Défectueux ──
+  // ── Défectueux ──
   const defSession = S.defectueux.filter(d => d.session_id === session.id);
   if (defSession.length) {
-    const defData = [['Produit', 'Variante/Taille', 'SKU', 'Type de défaut', 'Note', 'Date']];
+    const defData = [['Produit','Taille','SKU','Type de defaut','Note','Date']];
     defSession.forEach(d => {
       const cat = S.catalogue.find(c => c.sku === d.sku);
-      defData.push([d.nom || d.sku, cat?.taille || '—', d.sku, d.type_defaut, d.note || '', new Date(d.created_at).toLocaleString('fr-FR')]);
+      defData.push([d.nom||d.sku, cat?.taille||'—', d.sku, d.type_defaut, d.note||'', new Date(d.created_at).toLocaleString('fr-FR')]);
     });
     const wsDef = XLSX.utils.aoa_to_sheet(defData);
-    wsDef['!cols'] = [{wch:28},{wch:12},{wch:22},{wch:18},{wch:30},{wch:18}];
-    XLSX.utils.book_append_sheet(wb, wsDef, 'Défectueux');
+    wsDef['!cols'] = [{wch:28},{wch:10},{wch:22},{wch:18},{wch:30},{wch:18}];
+    XLSX.utils.book_append_sheet(wb, wsDef, 'Defectueux');
   }
 
-  XLSX.writeFile(wb, 'Stock-Logistique_' + session.nom.replace(/[^a-zA-Z0-9]/g, '_') + '_' + new Date().toISOString().split('T')[0] + '.xlsx');
+  XLSX.writeFile(wb, 'Stock-Logistique_'+session.nom.replace(/[^a-zA-Z0-9]/g,'_')+'_'+new Date().toISOString().split('T')[0]+'.xlsx');
 }
-
 function exportExcelAll() {
   const wb = XLSX.utils.book_new();
   const sessData = [['Nom', 'Mode', 'Statut', 'Date création', 'Refs scannées', 'Total scanné']];
@@ -638,7 +688,6 @@ function tryPin() {
 function renderNav() {
   const tabs = [
     {id: 'scanner', label: '📷 Scanner'},
-    {id: 'retours', label: '↩ Retours'},
     {id: 'sessions', label: '📁 Sessions'},
     {id: 'defectueux', label: '⚠ Défectueux'},
     {id: 'catalogue', label: '📚 Catalogue'},
@@ -664,7 +713,7 @@ function renderNav() {
 function renderScanner() {
   const {session, mode, packingList, scans, history, scanFeedback, filter} = S;
   const rows = getRows();
-  const {total, conformes, manquants, surplus} = getCounters();
+  const {total, conformes, manquants, surplus, inconnus} = getCounters();
 
   const plBanner = packingList ? h('div', {style: 'padding:10px 16px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0'},
     h('div', {class: 'pl-banner'},
@@ -739,16 +788,32 @@ function renderScanner() {
         h('div', {class: 'cbox red'}, h('div', {class: 'cbox-val'}, manquants), h('div', {class: 'cbox-lbl'}, 'Manquants')),
         h('div', {class: 'cbox orange'}, h('div', {class: 'cbox-val'}, surplus), h('div', {class: 'cbox-lbl'}, 'Surplus'))
       ),
+      h('div', {class: 'counters', style: 'margin-top:6px;grid-template-columns:1fr'},
+        h('div', {class: 'cbox purple', style: 'cursor:' + (inconnus>0?'pointer':'default'), onClick: () => inconnus>0 ? set({filter:'inconnus'}) : null},
+          h('div', {class: 'cbox-val'}, inconnus),
+          h('div', {class: 'cbox-lbl'}, '🔍 Inconnus / Non reconnus')
+        )
+      ),
       session && history.length ? h('button', {class: 'btn btn-ghost btn-sm', style: 'margin-top:8px;width:100%', onClick: undoLast}, '↩ Annuler dernier scan') : null
     ),
     h('div', {class: 'sb-section', style: 'flex:1'},
       h('div', {class: 'sb-label'}, 'Historique'),
       history.length === 0 ? h('div', {style: 'color:var(--muted);font-size:12px;padding:4px 0'}, 'Aucun scan') :
       h('div', {style: 'max-height:180px;overflow-y:auto'},
-        ...history.slice(0, 30).map(hi => h('div', {class: 'hist-item'},
+        ...history.slice(0, 30).map((hi, idx) => h('div', {class: 'hist-item'},
           h('span', {class: 'badge ' + (hi.delta > 0 ? 'badge-green' : 'badge-red'), style: 'min-width:30px;justify-content:center'}, (hi.delta > 0 ? '+' : '') + hi.delta),
           h('span', {style: 'flex:1;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'}, hi.nom || hi.sku),
-          h('span', {class: 'hist-time'}, hi.time)
+          h('span', {class: 'hist-time'}, hi.time),
+          idx === 0 ? h('button', {
+            class: 'btn btn-ghost btn-sm',
+            style: 'font-size:11px;padding:2px 5px;color:var(--orange);flex-shrink:0',
+            title: 'Marquer comme défectueux',
+            onClick: () => {
+              if (confirm('⚠ Marquer "' + (hi.nom || hi.sku) + '" comme défectueux ?\n\nCet article sera ajouté à la liste des défectueux.')) {
+                set({mDefect: {sku: hi.sku, nom: hi.nom || hi.sku}});
+              }
+            }
+          }, '⚠') : null
         ))
       )
     )
@@ -791,18 +856,37 @@ function renderScanner() {
       const barClass = attendu ? (row.qty_pos === attendu ? 'prog-ok' : row.qty_pos > attendu ? 'prog-over' : 'prog-miss') : 'prog-neutral';
       const ecartClass = ecart === 0 ? 'ecart-ok' : ecart > 0 ? 'ecart-pos' : 'ecart-neg';
       const ecartPrefix = ecart > 0 ? '▲ +' : ecart < 0 ? '▼ ' : '✓ ';
-      return h('tr', {},
+      const isInconnu = !S.catalogue.find(p => p.sku === row.sku);
+      const rowClass = isInconnu ? 'row-inconnu' : '';
+      // Fonction ajustement rapide inline
+      function quickAdj(sku, delta) {
+        if (!session) return;
+        const sc = S.scans.find(s => s.sku === sku);
+        if (!sc) return;
+        if (delta > 0) sc.qty_pos = Math.max(0, (sc.qty_pos||0) + 1);
+        else sc.qty_pos = Math.max(0, (sc.qty_pos||0) - 1);
+        dbUpsertScan(session.id, sc);
+        set({scans:[...S.scans]});
+      }
+      return h('tr', {class: rowClass},
         h('td', {}, h('div', {style: 'display:flex;align-items:center;gap:8px'},
-          h('div', {class: 'img-ph'}, '📦'),
-          h('span', {style: 'font-weight:500;color:var(--text)'}, row.nom || row.sku)
+          isInconnu ? h('div', {class: 'img-ph', style: 'background:#f5f3ff;border-color:#c4b5fd;color:#7c3aed'}, '🔍') : h('div', {class: 'img-ph'}, '📦'),
+          h('div', {},
+            h('span', {style: 'font-weight:500;color:' + (isInconnu?'#7c3aed':'var(--text)')}, row.nom || row.sku),
+            isInconnu ? h('div', {style: 'font-size:10px;color:#7c3aed;font-weight:500'}, '⚠ SKU non reconnu') : null
+          )
         )),
-        h('td', {}, h('span', {class: 'sku-badge'}, row.sku)),
+        h('td', {}, h('span', {class: 'sku-badge', style: isInconnu?'border-color:#c4b5fd;color:#7c3aed':''}, row.sku)),
         h('td', {}, row.cat ? h('span', {class: 'cat-chip'}, row.cat) : h('span', {style: 'color:var(--muted)'}, '—')),
         h('td', {}, row.taille ? h('span', {class: 'taille-chip'}, row.taille) : h('span', {style: 'color:var(--muted)'}, '—')),
         h('td', {style: 'text-align:center;font-family:var(--mono);font-weight:600'}, attendu || '—'),
-        h('td', {style: 'text-align:center'},
-          h('span', {style: 'font-family:var(--mono);font-weight:700;font-size:14px;color:' + ((row.qty_pos || 0) > 0 ? 'var(--text)' : 'var(--muted)')}, row.qty_pos || 0),
-          (row.qty_neg || 0) > 0 ? h('span', {style: 'color:var(--red);font-size:11px;margin-left:4px'}, '-' + (row.qty_neg || 0)) : null
+        h('td', {},
+          h('div', {class: 'inline-qty'},
+            session ? h('button', {class: 'iqty-btn', style: 'color:var(--red)', onClick: () => quickAdj(row.sku, -1)}, '−') : null,
+            h('span', {class: 'iqty-val', style: (row.qty_pos||0)>0?'color:var(--text)':'color:var(--muted)'}, row.qty_pos || 0),
+            session ? h('button', {class: 'iqty-btn', style: 'color:var(--green)', onClick: () => quickAdj(row.sku, 1)}, '+') : null,
+            (row.qty_neg||0) > 0 ? h('span', {style: 'color:var(--red);font-size:11px;margin-left:2px'}, '-'+(row.qty_neg||0)) : null
+          )
         ),
         h('td', {},
           attendu ? h('div', {style: 'display:flex;align-items:center;gap:6px'},
@@ -840,133 +924,45 @@ function renderScanner() {
   return h('div', {class: 'page'}, h('div', {class: 'scanner-wrap'}, sidebar, main));
 }
 
-function renderRetours() {
-  const {retourMode, retourScans, retourList, retourInput, retourFeedback} = S;
 
-  function doRetourScan(rawSku) {
-    const sku = rawSku.trim().toUpperCase();
-    if (!sku) return;
-    const produit = S.catalogue.find(p => p.sku === sku);
-    const listItem = retourList.find(p => p.sku === sku);
-    let sc = retourScans.find(s => s.sku === sku);
-    if (!sc) {
-      sc = {sku, nom: produit?.nom || sku, taille: produit?.taille || '', cat: produit?.categorie || '', qty: 0, attendu: listItem?.attendu || 0};
-      S.retourScans.push(sc);
-    }
-    sc.qty = (sc.qty || 0) + 1;
-    let type = 'ok', msg = '+1 retour × ' + (produit?.nom || sku);
-    if (!produit) { type = 'warn'; msg = '⚠ SKU inconnu : ' + sku; }
-    else if (retourMode === 'liste' && !listItem) { type = 'warn'; msg = '⚠ ' + produit.nom + ' — non attendu'; }
-    set({retourScans: [...S.retourScans], retourInput: '', retourFeedback: {type, msg}});
-    clearTimeout(window._retFbTimer);
-    window._retFbTimer = setTimeout(() => set({retourFeedback: null}), 3000);
+function renderSessionsList(container) {
+  const filtered = S.sessions.filter(s => !S.searchSess || s.nom.toLowerCase().includes(S.searchSess.toLowerCase()));
+  container.innerHTML = '';
+  if (filtered.length === 0) {
+    const empty = h('div', {class: 'empty'}, h('div', {class: 'empty-icon'}, '📁'), h('div', {}, 'Aucune session'));
+    container.appendChild(empty);
+    return;
   }
-
-  function exportRetours() {
-    const wb = XLSX.utils.book_new();
-    const rows = [['Produit', 'SKU', 'Taille', 'Retours reçus', 'Attendus', 'Écart', 'Statut']];
-    retourScans.forEach(sc => {
-      const ecart = sc.qty - (sc.attendu || 0);
-      const statut = sc.attendu ? (ecart === 0 ? '✓ OK' : ecart > 0 ? '▲ Surplus' : '▼ Manquant') : '— Non attendu';
-      rows.push([sc.nom || sc.sku, sc.sku, sc.taille || '—', sc.qty, sc.attendu || '—', sc.attendu ? (ecart >= 0 ? '+' : '') + ecart : '—', statut]);
-    });
-    const ws = XLSX.utils.aoa_to_sheet(rows);
-    ws['!cols'] = [{wch:28},{wch:20},{wch:8},{wch:14},{wch:10},{wch:8},{wch:14}];
-    XLSX.utils.book_append_sheet(wb, ws, 'Retours');
-    XLSX.writeFile(wb, 'Retours_' + new Date().toISOString().split('T')[0] + '.xlsx');
-  }
-
-  const totalRetours = retourScans.reduce((a, s) => a + (s.qty || 0), 0);
-  const conformes = retourScans.filter(s => s.attendu && s.qty === s.attendu).length;
-
-  return h('div', {class: 'page'},
-    h('div', {class: 'page-hd'},
-      h('h2', {}, '↩ Retours'),
-      h('div', {style: 'display:flex;gap:8px'},
-        h('button', {class: 'btn btn-outline btn-sm', onClick: exportRetours}, '⬇ Export Excel'),
-        h('button', {class: 'btn btn-danger btn-sm', onClick: () => { if (confirm('Vider les retours ?')) set({retourScans: [], retourList: []}); }}, '🗑 Réinitialiser')
-      )
-    ),
-    h('div', {class: 'scanner-wrap'},
-      h('div', {class: 'scanner-sidebar'},
-        h('div', {class: 'sb-section'},
-          h('div', {class: 'sb-label'}, 'Mode'),
-          h('div', {style: 'display:flex;gap:6px'},
-            h('button', {class: 'btn btn-sm ' + (retourMode === 'libre' ? 'btn-primary' : 'btn-outline'), onClick: () => set({retourMode: 'libre', retourList: []})}, '📦 Libre'),
-            h('button', {class: 'btn btn-sm ' + (retourMode === 'liste' ? 'btn-primary' : 'btn-outline'), onClick: () => set({retourMode: 'liste'})}, '📋 Avec liste')
+  filtered.forEach(s => {
+    const scans = s.scans || [];
+    const totalPos = scans.reduce((a, sc) => a + (sc.qty_pos || 0), 0);
+    const totalNeg = scans.reduce((a, sc) => a + (sc.qty_neg || 0), 0);
+    const expanded = S.expandedSession === s.id;
+    const card = h('div', {class: 'sess-card'},
+      h('div', {class: 'sess-card-hd', onClick: () => set({expandedSession: expanded ? null : s.id})},
+        h('div', {style: 'flex:1'},
+          h('div', {class: 'sess-card-name'}, s.nom),
+          h('div', {style: 'display:flex;gap:6px;align-items:center;margin-top:4px;flex-wrap:wrap'},
+            h('span', {class: 'badge ' + (s.status === 'active' ? 'badge-green' : 'badge-gray')}, s.status === 'active' ? '● Actif' : 'Clôturé'),
+            h('span', {class: 'badge badge-blue'}, MODES.find(m => m.id === s.mode)?.label || s.mode || '—'),
+            h('span', {style: 'font-size:12px;color:var(--muted)'}, new Date(s.created_at).toLocaleDateString('fr-FR'))
           )
         ),
-        retourMode === 'liste' ? h('div', {class: 'sb-section'},
-          h('div', {class: 'sb-label'}, 'Liste attendue (SKU;qté)'),
-          h('textarea', {rows: '6', id: 'retListInput', style: 'font-family:var(--mono);font-size:11px',
-            placeholder: 'CLN-XS-NOIR;2\nHDE-M-BLDY;1\n...',
-            value: retourList.map(p => p.sku + ';' + p.attendu).join('\n')}),
-          h('button', {class: 'btn btn-primary btn-sm', style: 'width:100%;margin-top:6px', onClick: () => {
-            const text = document.getElementById('retListInput')?.value?.trim();
-            if (!text) return;
-            const list = text.split('\n').filter(Boolean).map(l => {
-              const parts = l.split(/[;,]/);
-              const sku = parts[0]?.trim().toUpperCase();
-              const attendu = parseInt(parts[1]) || 1;
-              const prod = S.catalogue.find(p => p.sku === sku);
-              return {sku, nom: prod?.nom || sku, taille: prod?.taille || '', attendu};
-            }).filter(p => p.sku);
-            set({retourList: list});
-          }}, '✓ Valider la liste')
-        ) : null,
-        h('div', {class: 'sb-section'},
-          h('div', {class: 'scan-zone'},
-            h('div', {class: 'scan-zone-label'}, 'Scanner les retours'),
-            h('input', {class: 'scan-input', type: 'text', placeholder: 'SKU + Entrée', id: 'retourInput',
-              value: retourInput,
-              onInput: e => S.retourInput = e.target.value,
-              onKeydown: e => { if (e.key === 'Enter' && S.retourInput.trim()) doRetourScan(S.retourInput); }
-            }),
-            retourFeedback ? h('div', {class: 'scan-feedback ' + retourFeedback.type}, retourFeedback.msg) : h('div', {class: 'scan-feedback'})
-          )
-        ),
-        h('div', {class: 'sb-section'},
-          h('div', {class: 'counters'},
-            h('div', {class: 'cbox'}, h('div', {class: 'cbox-val'}, totalRetours), h('div', {class: 'cbox-lbl'}, 'Reçus')),
-            h('div', {class: 'cbox green'}, h('div', {class: 'cbox-val'}, conformes), h('div', {class: 'cbox-lbl'}, 'Conformes'))
-          )
-        )
-      ),
-      h('div', {class: 'scanner-main'},
-        h('div', {class: 'main-topbar'},
-          h('span', {class: 'sess-info'}, h('strong', {}, retourMode === 'liste' ? 'Mode avec liste' : 'Mode libre'),
-            retourList.length > 0 ? h('span', {style: 'font-size:11px;color:var(--muted)'}, '· ' + retourList.length + ' refs attendues') : null)
-        ),
-        h('div', {class: 'scan-table-wrap'},
-          retourScans.length === 0 ? h('div', {class: 'empty'}, h('div', {class: 'empty-icon'}, '↩'), h('div', {}, 'Scannez les retours dans le panneau gauche')) :
-          h('table', {class: 'scan-table'},
-            h('thead', {}, h('tr', {},
-              h('th', {}, 'ARTICLE'), h('th', {}, 'SKU'), h('th', {}, 'TAILLE'),
-              h('th', {}, 'REÇUS'), h('th', {}, 'ATTENDUS'), h('th', {}, 'ÉCART'), h('th', {}, 'STATUT')
-            )),
-            h('tbody', {}, ...retourScans.map(sc => {
-              const ecart = sc.qty - (sc.attendu || 0);
-              const statut = sc.attendu ? (ecart === 0 ? '✓ OK' : ecart > 0 ? '▲ Surplus' : '▼ Manquant') : '— Non attendu';
-              const ecartClass = ecart === 0 ? 'ecart-ok' : ecart > 0 ? 'ecart-pos' : 'ecart-neg';
-              return h('tr', {},
-                h('td', {style: 'font-weight:500'}, sc.nom || sc.sku),
-                h('td', {}, h('span', {class: 'sku-badge'}, sc.sku)),
-                h('td', {}, sc.taille ? h('span', {class: 'taille-chip'}, sc.taille) : '—'),
-                h('td', {style: 'font-family:var(--mono);font-weight:700;font-size:14px'}, sc.qty),
-                h('td', {style: 'font-family:var(--mono);color:var(--muted)'}, sc.attendu || '—'),
-                h('td', {}, h('span', {class: 'ecart-badge ' + ecartClass}, ecart >= 0 ? '+' + ecart : ecart)),
-                h('td', {},
-                  h('span', {class: 'badge ' + (ecart === 0 ? 'badge-green' : 'badge-red')}, statut),
-                  h('button', {class: 'btn btn-ghost btn-sm', style: 'margin-left:4px;font-size:11px',
-                    onClick: () => set({mDefect: {sku: sc.sku, nom: sc.nom || sc.sku}})}, '⚠')
-                )
-              );
-            }))
-          )
+        h('div', {style: 'display:flex;gap:6px;align-items:center'},
+          h('span', {class: 'badge badge-green'}, '+' + totalPos),
+          h('span', {class: 'badge badge-red'}, '-' + totalNeg),
+          h('button', {class: 'btn btn-outline btn-sm', onClick: e => { e.stopPropagation(); exportExcelSession(s, scans, null); }}, '⬇'),
+          h('button', {class: 'btn btn-danger btn-sm', onClick: async e => {
+            e.stopPropagation();
+            const msg = s.status === 'active' ? 'Supprimer cette session active ?' : 'Supprimer cette session ?';
+            if (confirm(msg + '\n\n' + s.nom)) { await dbDeleteSession(s.id); loadSessions(); }
+          }}, '🗑'),
+          h('span', {style: 'color:var(--muted)'}, expanded ? '▲' : '▼')
         )
       )
-    )
-  );
+    );
+    container.appendChild(card);
+  });
 }
 
 function renderSessions() {
@@ -975,13 +971,20 @@ function renderSessions() {
     h('div', {class: 'page-hd'},
       h('h2', {}, '📁 Sessions'),
       h('div', {style: 'display:flex;gap:8px;align-items:center'},
-        h('input', {type: 'text', placeholder: 'Rechercher…', style: 'width:200px', value: S.searchSess, onInput: e => set({searchSess: e.target.value})}),
+        h('input', {type: 'text', placeholder: 'Rechercher…', style: 'width:200px', id: 'searchSessInput',
+          onInput: e => {
+            S.searchSess = e.target.value;
+            // Re-render uniquement la liste, pas le header
+            const list = document.getElementById('sessList');
+            if (list) renderSessionsList(list);
+          }
+        }),
         h('button', {class: 'btn btn-outline btn-sm', onClick: () => { loadSessions().then(exportExcelAll); }}, '⬇ Export tout')
       )
     ),
     S.loadingSess ? h('div', {class: 'loading'}, h('div', {class: 'spinner'}), 'Chargement…') :
     filtered.length === 0 ? h('div', {class: 'empty'}, h('div', {class: 'empty-icon'}, '📁'), h('div', {}, 'Aucune session')) :
-    h('div', {class: 'page-body', style: 'padding:16px 20px'},
+    h('div', {class: 'page-body', style: 'padding:16px 20px', id: 'sessList'},
       ...filtered.map(s => {
         const scans = s.scans || [];
         const totalPos = scans.reduce((a, sc) => a + (sc.qty_pos || 0), 0);
@@ -1001,29 +1004,62 @@ function renderSessions() {
               h('span', {class: 'badge badge-green'}, '+' + totalPos),
               h('span', {class: 'badge badge-red'}, '-' + totalNeg),
               h('button', {class: 'btn btn-outline btn-sm', onClick: e => { e.stopPropagation(); exportExcelSession(s, scans, null); }}, '⬇'),
-              s.mode === 'test' ? h('button', {class: 'btn btn-danger btn-sm', onClick: async e => {
+              h('button', {class: 'btn btn-danger btn-sm', onClick: async e => {
                 e.stopPropagation();
-                if (confirm('Supprimer cette session test ?')) { await dbDeleteSession(s.id); loadSessions(); }
-              }}, '🗑') : null,
+                const msg = s.status === 'active' ? 'Supprimer cette session active ?' : 'Supprimer cette session ?';
+                if (confirm(msg + '\n\n' + s.nom)) { await dbDeleteSession(s.id); loadSessions(); }
+              }}, '🗑'),
               h('span', {style: 'color:var(--muted)'}, expanded ? '▲' : '▼')
             )
           ),
           expanded ? h('div', {class: 'sess-card-bd'},
             scans.length === 0 ? h('div', {style: 'color:var(--muted);font-size:13px;text-align:center;padding:1rem'}, 'Aucun scan') :
             h('div', {style: 'overflow-x:auto'},
-              h('table', {class: 'tbl'},
-                h('thead', {}, h('tr', {}, h('th', {}, 'Produit'), h('th', {}, 'SKU'), h('th', {}, 'Taille'), h('th', {}, 'Entrées +'), h('th', {}, 'Sorties -'), h('th', {}, 'Écart net'))),
-                h('tbody', {}, ...scans.map(sc => {
-                  const net = (sc.qty_pos || 0) - (sc.qty_neg || 0);
-                  return h('tr', {},
-                    h('td', {style: 'font-weight:500'}, sc.nom || '—'),
-                    h('td', {}, h('span', {class: 'sku-badge'}, sc.sku)),
-                    h('td', {}, sc.taille ? h('span', {class: 'taille-chip'}, sc.taille) : '—'),
-                    h('td', {}, h('span', {style: 'color:var(--green);font-weight:600'}, '+' + (sc.qty_pos || 0))),
-                    h('td', {}, h('span', {style: 'color:var(--red);font-weight:600'}, '-' + (sc.qty_neg || 0))),
-                    h('td', {}, h('span', {style: 'font-weight:700;color:' + (net >= 0 ? 'var(--green)' : 'var(--red)')}, (net >= 0 ? '+' : '') + net))
-                  );
-                }))
+              h('table', {class: 'tbl', style: 'border-collapse:collapse'},
+                h('thead', {}, h('tr', {},
+                  h('th', {}, 'Produit / Variante'), h('th', {}, 'SKU'), h('th', {}, 'Taille'), h('th', {}, 'Entrées +'), h('th', {}, 'Sorties -'), h('th', {}, 'Écart net')
+                )),
+                h('tbody', {}, ...(() => {
+                  // Grouper les scans par nom produit
+                  const grps = {};
+                  scans.forEach(sc => {
+                    const key = sc.nom || sc.sku;
+                    if (!grps[key]) grps[key] = {nom: key, variantes: []};
+                    grps[key].variantes.push(sc);
+                  });
+                  return Object.values(grps).flatMap(g => {
+                    const tPos = g.variantes.reduce((a, v) => a + (v.qty_pos || 0), 0);
+                    const tNeg = g.variantes.reduce((a, v) => a + (v.qty_neg || 0), 0);
+                    const tNet = tPos - tNeg;
+                    const gKey = 'sess_' + s.id + '_' + g.nom;
+                    const open = S.expandedGroups[gKey] !== false;
+                    const toggle = () => { const eg = {...S.expandedGroups}; eg[gKey] = !open; set({expandedGroups: eg}); };
+                    return [
+                      // Ligne groupe
+                      h('tr', {onClick: toggle, style: 'cursor:pointer'},
+                        h('td', {colspan: '6', class: 'group-hd'},
+                          h('span', {style: 'flex:1'}, g.nom),
+                          h('span', {class: 'group-total', style: 'color:var(--green)'}, '+' + tPos),
+                          h('span', {class: 'group-total', style: 'color:var(--red);margin-left:8px'}, '-' + tNeg),
+                          h('span', {class: 'group-total', style: 'color:' + (tNet >= 0 ? 'var(--green)' : 'var(--red)') + ';margin-left:8px'}, (tNet >= 0 ? '+' : '') + tNet),
+                          h('span', {class: 'group-arrow'}, open ? '▲' : '▼')
+                        )
+                      ),
+                      // Lignes variantes
+                      ...(!open ? [] : g.variantes.map(sc => {
+                        const net = (sc.qty_pos || 0) - (sc.qty_neg || 0);
+                        return h('tr', {class: 'group-variant'},
+                          h('td', {style: 'padding-left:28px;color:var(--text2)'}, '↳ ' + (sc.taille ? sc.nom + ' ' + sc.taille : sc.nom || sc.sku)),
+                          h('td', {}, h('span', {class: 'sku-badge'}, sc.sku)),
+                          h('td', {}, sc.taille ? h('span', {class: 'taille-chip'}, sc.taille) : '—'),
+                          h('td', {}, h('span', {style: 'color:var(--green);font-weight:600'}, '+' + (sc.qty_pos || 0))),
+                          h('td', {}, h('span', {style: 'color:var(--red);font-weight:600'}, '-' + (sc.qty_neg || 0))),
+                          h('td', {}, h('span', {style: 'font-weight:700;color:' + (net >= 0 ? 'var(--green)' : 'var(--red)')}, (net >= 0 ? '+' : '') + net))
+                        );
+                      }))
+                    ];
+                  });
+                })())
               )
             )
           ) : null
@@ -1063,30 +1099,112 @@ function renderDefectueux() {
   );
 }
 
+function renderCatalogueList(container) {
+  const filtered = S.catalogue.filter(p =>
+    !S.searchCat || p.sku.includes(S.searchCat.toUpperCase()) || p.nom.toLowerCase().includes(S.searchCat.toLowerCase())
+  );
+  container.innerHTML = '';
+  if (filtered.length === 0) {
+    container.appendChild(h('div', {class: 'empty'}, h('div', {class: 'empty-icon'}, '📦'), h('div', {}, 'Aucun résultat')));
+    return;
+  }
+  const groups = {};
+  filtered.forEach(p => {
+    const key = p.nom;
+    if (!groups[key]) groups[key] = {nom: key, cat: p.categorie || '', image: p.image_url || '', variantes: []};
+    groups[key].variantes.push(p);
+  });
+  const table = h('table', {class: 'tbl', style: 'border-collapse:collapse'},
+    h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', {}, 'Produit / Variante'), h('th', {}, 'SKU'), h('th', {}, 'Taille'), h('th', {}, 'Catégorie'))),
+    h('tbody', {}, ...Object.values(groups).flatMap(g => {
+      const key = 'cat_' + g.nom;
+      const open = S.expandedGroups[key] !== false;
+      const toggleFn = () => { const eg = {...S.expandedGroups}; eg[key] = !open; set({expandedGroups: eg}); };
+      return [
+        h('tr', {onClick: toggleFn, style: 'cursor:pointer'},
+          h('td', {colspan: '5', class: 'group-hd'},
+            g.image ? h('img', {src: g.image, style: 'width:28px;height:28px;object-fit:cover;border-radius:4px;flex-shrink:0'}) : h('span', {style: 'font-size:18px'}, '📦'),
+            h('span', {}, g.nom),
+            g.cat ? h('span', {class: 'cat-chip', style: 'font-weight:400'}, g.cat) : null,
+            h('span', {style: 'font-size:11px;color:var(--muted);font-weight:400'}, g.variantes.length + ' variante' + (g.variantes.length > 1 ? 's' : '')),
+            h('span', {class: 'group-arrow'}, open ? '▲' : '▼')
+          )
+        ),
+        ...(!open ? [] : g.variantes.map(p => h('tr', {class: 'group-variant'},
+          h('td', {style: 'padding-left:28px'}, ''),
+          h('td', {style: 'padding-left:28px;color:var(--text2)'}, '↳ ' + p.nom + (p.taille ? ' ' + p.taille : '')),
+          h('td', {}, h('span', {class: 'sku-badge'}, p.sku)),
+          h('td', {}, p.taille ? h('span', {class: 'taille-chip'}, p.taille) : h('span', {style: 'color:var(--muted)'}, '—')),
+          h('td', {}, p.categorie ? h('span', {class: 'cat-chip'}, p.categorie) : h('span', {style: 'color:var(--muted)'}, '—'))
+        )))
+      ];
+    }))
+  );
+  container.appendChild(table);
+}
+
 function renderCatalogue() {
   const filtered = S.catalogue.filter(p =>
     !S.searchCat || p.sku.includes(S.searchCat.toUpperCase()) || p.nom.toLowerCase().includes(S.searchCat.toLowerCase())
   );
+  // Grouper par nom produit
+  const groups = {};
+  filtered.forEach(p => {
+    const key = p.nom;
+    if (!groups[key]) groups[key] = {nom: key, cat: p.categorie || '', image: p.image_url || '', variantes: []};
+    groups[key].variantes.push(p);
+  });
+
   return h('div', {class: 'page'},
     h('div', {class: 'page-hd'},
       h('h2', {}, '📚 Catalogue'),
       h('div', {style: 'display:flex;gap:8px;align-items:center'},
-        h('input', {type: 'text', placeholder: 'SKU ou nom…', style: 'width:200px', value: S.searchCat, onInput: e => set({searchCat: e.target.value})}),
+        h('input', {type: 'text', placeholder: 'SKU ou nom…', style: 'width:200px', id: 'searchCatInput',
+          onInput: e => {
+            S.searchCat = e.target.value;
+            const list = document.getElementById('catList');
+            if (list) renderCatalogueList(list);
+          }
+        }),
         h('button', {class: 'btn btn-outline btn-sm', onClick: () => set({mCsv: true})}, '⬆ Import CSV'),
         h('button', {class: 'btn btn-primary btn-sm', onClick: () => set({mAddProd: true})}, '+ Ajouter')
       )
     ),
     filtered.length === 0 ? h('div', {class: 'empty'}, h('div', {class: 'empty-icon'}, '📦'), h('div', {}, 'Catalogue vide — importez un CSV Shopify ou ajoutez manuellement')) :
-    h('div', {class: 'page-body'},
-      h('table', {class: 'tbl'},
-        h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', {}, 'Produit'), h('th', {}, 'SKU'), h('th', {}, 'Taille'), h('th', {}, 'Catégorie'))),
-        h('tbody', {}, ...filtered.map(p => h('tr', {},
-          h('td', {}, p.image_url ? h('img', {src: p.image_url, class: 'img-thumb', alt: p.nom}) : h('div', {class: 'img-ph'}, '📦')),
-          h('td', {style: 'font-weight:500;color:var(--text)'}, p.nom),
-          h('td', {}, h('span', {class: 'sku-badge'}, p.sku)),
-          h('td', {}, p.taille ? h('span', {class: 'taille-chip'}, p.taille) : h('span', {style: 'color:var(--muted)'}, '—')),
-          h('td', {}, p.categorie ? h('span', {class: 'cat-chip'}, p.categorie) : h('span', {style: 'color:var(--muted)'}, '—'))
-        )))
+    h('div', {class: 'page-body', id: 'catList'},
+      h('table', {class: 'tbl', style: 'border-collapse:collapse'},
+        h('thead', {}, h('tr', {},
+          h('th', {}, ''), h('th', {}, 'Produit / Variante'), h('th', {}, 'SKU'), h('th', {}, 'Taille'), h('th', {}, 'Catégorie')
+        )),
+        h('tbody', {}, ...Object.values(groups).flatMap(g => {
+          const key = 'cat_' + g.nom;
+          const open = S.expandedGroups[key] !== false; // ouvert par défaut
+          const toggleFn = () => {
+            const eg = {...S.expandedGroups};
+            eg[key] = !open;
+            set({expandedGroups: eg});
+          };
+          return [
+            // Ligne groupe (cliquable)
+            h('tr', {onClick: toggleFn, style: 'cursor:pointer'},
+              h('td', {colspan: '5', class: 'group-hd'},
+                g.image ? h('img', {src: g.image, style: 'width:28px;height:28px;object-fit:cover;border-radius:4px;flex-shrink:0'}) : h('span', {style: 'font-size:18px'}, '📦'),
+                h('span', {}, g.nom),
+                g.cat ? h('span', {class: 'cat-chip', style: 'font-weight:400'}, g.cat) : null,
+                h('span', {style: 'font-size:11px;color:var(--muted);font-weight:400'}, g.variantes.length + ' variante' + (g.variantes.length > 1 ? 's' : '')),
+                h('span', {class: 'group-arrow'}, open ? '▲' : '▼')
+              )
+            ),
+            // Lignes variantes (masquables)
+            ...(!open ? [] : g.variantes.map(p => h('tr', {class: 'group-variant'},
+              h('td', {style: 'padding-left:28px'}, ''),
+              h('td', {style: 'padding-left:28px;color:var(--text2)'}, '↳ ' + p.nom + (p.taille ? ' ' + p.taille : '')),
+              h('td', {}, h('span', {class: 'sku-badge'}, p.sku)),
+              h('td', {}, p.taille ? h('span', {class: 'taille-chip'}, p.taille) : h('span', {style: 'color:var(--muted)'}, '—')),
+              h('td', {}, p.categorie ? h('span', {class: 'cat-chip'}, p.categorie) : h('span', {style: 'color:var(--muted)'}, '—'))
+            )))
+          ];
+        }))
       )
     )
   );
@@ -1462,7 +1580,6 @@ function render() {
   app.appendChild(renderNav());
   let page;
   if (S.page === 'scanner') page = renderScanner();
-  else if (S.page === 'retours') page = renderRetours();
   else if (S.page === 'sessions') page = renderSessions();
   else if (S.page === 'defectueux') page = renderDefectueux();
   else if (S.page === 'catalogue') page = renderCatalogue();
