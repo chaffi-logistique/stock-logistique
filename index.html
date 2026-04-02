@@ -1318,19 +1318,33 @@ function renderCatalogueList(container) {
     groups[key].variantes.push(p);
   });
   const table = h('table', {class: 'tbl', style: 'border-collapse:collapse'},
-    h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', {}, 'Produit / Variante'), h('th', {}, 'SKU'), h('th', {}, 'Taille'), h('th', {}, 'Catégorie'))),
+    h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', {}, 'Produit / Variante'), h('th', {}, 'SKU'), h('th', {}, 'Taille'), h('th', {}, 'Catégorie'), h('th', {style:'width:36px'}, ''))),
     h('tbody', {}, ...Object.values(groups).flatMap(g => {
       const key = 'cat_' + g.nom;
       const open = S.expandedGroups[key] !== false;
       const toggleFn = () => { const eg = {...S.expandedGroups}; eg[key] = !open; set({expandedGroups: eg}); };
       return [
-        h('tr', {onClick: toggleFn, style: 'cursor:pointer'},
-          h('td', {colspan: '5', class: 'group-hd'},
+        h('tr', {},
+          h('td', {colspan: '5', class: 'group-hd', onClick: toggleFn, style: 'cursor:pointer'},
             g.image ? h('img', {src: g.image, style: 'width:28px;height:28px;object-fit:cover;border-radius:4px;flex-shrink:0'}) : h('span', {style: 'font-size:18px'}, '📦'),
             h('span', {}, g.nom),
             g.cat ? h('span', {class: 'cat-chip', style: 'font-weight:400'}, g.cat) : null,
             h('span', {style: 'font-size:11px;color:var(--muted);font-weight:400'}, g.variantes.length + ' variante' + (g.variantes.length > 1 ? 's' : '')),
             h('span', {class: 'group-arrow'}, open ? '▲' : '▼')
+          ),
+          h('td', {style: 'width:36px;text-align:center;background:var(--surface2)'},
+            h('button', {class: 'btn btn-ghost btn-sm', style: 'color:var(--red);padding:2px 6px;font-size:12px',
+              title: 'Supprimer tout le produit',
+              onClick: async e => {
+                e.stopPropagation();
+                if (confirm('Supprimer tout le produit "' + g.nom + '" (' + g.variantes.length + ' variante' + (g.variantes.length>1?'s':'') + ') du catalogue ?')) {
+                  for (const v of g.variantes) {
+                    await db.from('catalogue').delete().eq('id', v.id);
+                  }
+                  loadCatalogue();
+                }
+              }
+            }, '🗑')
           )
         ),
         ...(!open ? [] : g.variantes.map(p => h('tr', {class: 'group-variant'},
@@ -1338,7 +1352,19 @@ function renderCatalogueList(container) {
           h('td', {style: 'padding-left:28px;color:var(--text2)'}, '↳ ' + p.nom + (p.taille ? ' ' + p.taille : '')),
           h('td', {}, h('span', {class: 'sku-badge'}, p.sku)),
           h('td', {}, p.taille ? h('span', {class: 'taille-chip'}, p.taille) : h('span', {style: 'color:var(--muted)'}, '—')),
-          h('td', {}, p.categorie ? h('span', {class: 'cat-chip'}, p.categorie) : h('span', {style: 'color:var(--muted)'}, '—'))
+          h('td', {}, p.categorie ? h('span', {class: 'cat-chip'}, p.categorie) : h('span', {style: 'color:var(--muted)'}, '—')),
+          h('td', {style: 'width:36px;text-align:center'},
+            h('button', {class: 'btn btn-ghost btn-sm', style: 'color:var(--red);padding:2px 6px;font-size:12px',
+              title: 'Supprimer cette variante',
+              onClick: async e => {
+                e.stopPropagation();
+                if (confirm('Supprimer ' + p.sku + ' du catalogue ?')) {
+                  await db.from('catalogue').delete().eq('id', p.id);
+                  loadCatalogue();
+                }
+              }
+            }, '🗑')
+          )
         )))
       ];
     }))
@@ -1389,13 +1415,25 @@ function renderCatalogue() {
           };
           return [
             // Ligne groupe (cliquable)
-            h('tr', {onClick: toggleFn, style: 'cursor:pointer'},
-              h('td', {colspan: '5', class: 'group-hd'},
+            h('tr', {},
+              h('td', {colspan: '5', class: 'group-hd', onClick: toggleFn, style: 'cursor:pointer'},
                 g.image ? h('img', {src: g.image, style: 'width:28px;height:28px;object-fit:cover;border-radius:4px;flex-shrink:0'}) : h('span', {style: 'font-size:18px'}, '📦'),
                 h('span', {}, g.nom),
                 g.cat ? h('span', {class: 'cat-chip', style: 'font-weight:400'}, g.cat) : null,
                 h('span', {style: 'font-size:11px;color:var(--muted);font-weight:400'}, g.variantes.length + ' variante' + (g.variantes.length > 1 ? 's' : '')),
                 h('span', {class: 'group-arrow'}, open ? '▲' : '▼')
+              ),
+              h('td', {style: 'width:36px;text-align:center;background:var(--surface2)'},
+                h('button', {class: 'btn btn-ghost btn-sm', style: 'color:var(--red);padding:2px 6px;font-size:12px',
+                  title: 'Supprimer tout le produit',
+                  onClick: async e => {
+                    e.stopPropagation();
+                    if (confirm('Supprimer tout le produit "' + g.nom + '" (' + g.variantes.length + ' variante' + (g.variantes.length>1?'s':'') + ') du catalogue ?')) {
+                      for (const v of g.variantes) { await db.from('catalogue').delete().eq('id', v.id); }
+                      loadCatalogue();
+                    }
+                  }
+                }, '🗑')
               )
             ),
             // Lignes variantes (masquables)
@@ -1404,7 +1442,19 @@ function renderCatalogue() {
               h('td', {style: 'padding-left:28px;color:var(--text2)'}, '↳ ' + p.nom + (p.taille ? ' ' + p.taille : '')),
               h('td', {}, h('span', {class: 'sku-badge'}, p.sku)),
               h('td', {}, p.taille ? h('span', {class: 'taille-chip'}, p.taille) : h('span', {style: 'color:var(--muted)'}, '—')),
-              h('td', {}, p.categorie ? h('span', {class: 'cat-chip'}, p.categorie) : h('span', {style: 'color:var(--muted)'}, '—'))
+              h('td', {}, p.categorie ? h('span', {class: 'cat-chip'}, p.categorie) : h('span', {style: 'color:var(--muted)'}, '—')),
+              h('td', {style: 'width:36px;text-align:center'},
+                h('button', {class: 'btn btn-ghost btn-sm', style: 'color:var(--red);padding:2px 6px;font-size:12px',
+                  title: 'Supprimer cette variante',
+                  onClick: async e => {
+                    e.stopPropagation();
+                    if (confirm('Supprimer ' + p.sku + ' du catalogue ?')) {
+                      await db.from('catalogue').delete().eq('id', p.id);
+                      loadCatalogue();
+                    }
+                  }
+                }, '🗑')
+              )
             )))
           ];
         }))
