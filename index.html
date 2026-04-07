@@ -343,6 +343,10 @@ let S = {
   sessAddSearch: {}, // {sessionId: searchTerm} pour l'ajout d'article
   sessAddSuggest: {}, // {sessionId: [produits]}
   mSessPL: null, // {sessionId, key, current} pour éditer la PL d'une session
+  folders: JSON.parse(localStorage.getItem('sl_folders') || '[]'),
+  mNewFolder: false,
+  expandedFolder: null,
+  mAddToFolder: null, // {sessionId} pour choisir un dossier
   searchCat: '',
   searchSess: '',
   loadingSess: false,
@@ -434,6 +438,67 @@ async function dbUpdateScan(scanId, fields) {
 }
 async function dbSaveDefect(sku, nom, type, note, sessionId) {
   await db.from('defectueux').insert({sku, nom, type_defaut: type, note: note || null, session_id: sessionId || null});
+}
+
+// ── DOSSIERS (localStorage) ──────────────────────────────────────────────
+function getFolders() {
+  try { return JSON.parse(localStorage.getItem('sl_folders') || '[]'); } catch(e) { return []; }
+}
+function saveFolders(folders) {
+  localStorage.setItem('sl_folders', JSON.stringify(folders));
+  S.folders = folders;
+}
+function createFolder(nom) {
+  const folders = getFolders();
+  const id = 'folder_' + Date.now();
+  folders.push({id, nom, sessionIds: []});
+  saveFolders(folders);
+  set({folders: [...folders], mNewFolder: false});
+}
+function deleteFolder(id) {
+  const folders = getFolders().filter(f => f.id !== id);
+  saveFolders(folders);
+  set({folders: [...folders]});
+}
+function addToFolder(folderId, sessionId) {
+  const folders = getFolders();
+  folders.forEach(f => { f.sessionIds = f.sessionIds.filter(id => id !== sessionId); }); // retirer d'autres dossiers
+  const folder = folders.find(f => f.id === folderId);
+  if (folder && !folder.sessionIds.includes(sessionId)) folder.sessionIds.push(sessionId);
+  saveFolders(folders);
+  set({folders: [...folders], mAddToFolder: null});
+}
+function removeFromFolder(folderId, sessionId) {
+  const folders = getFolders();
+  const folder = folders.find(f => f.id === folderId);
+  if (folder) folder.sessionIds = folder.sessionIds.filter(id => id !== sessionId);
+  saveFolders(folders);
+  set({folders: [...folders]});
+}
+async function exportExcelFolder(folder) {
+  const sessions = S.sessions.filter(s => folder.sessionIds.map(String).includes(String(s.id)));
+  if (!sessions.length) { alert('Aucune session dans ce dossier.'); return; }
+
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Stock-Logistique';
+  wb.created = new Date();
+
+  // Ajouter chaque session — charger la PL depuis localStorage pour chacune
+  for (const s of sessions) {
+    let pl = [];
+    try { const raw = localStorage.getItem('pl_' + s.id); if (raw) pl = JSON.parse(raw); } catch(e) {}
+    const _prefix = s.nom.replace(/[^a-zA-Z0-9 _]/g,'').trim().substring(0,25) || ('Sess'+String(s.id).substring(0,6));
+    await addSessionToWorkbook(wb, s, s.scans || [], pl, _prefix);
+  }
+
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'Dossier_'+folder.nom.replace(/[^a-zA-Z0-9]/g,'_')+'_'+new Date().toISOString().split('T')[0]+'.xlsx';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 // ── SCAN ──────────────────────────────────────────────────────────────────
@@ -592,22 +657,11 @@ function getTailleFromSku(sku, catalogueTaille) {
   return 'TU';
 }
 
-async function exportExcelSession(session, scans, pl) {
-  // ── 1. Charger la PL depuis localStorage si non fournie ──
-  if (!pl || pl.length === 0) {
-    try {
-      const raw = localStorage.getItem('pl_' + session.id);
-      if (raw) pl = JSON.parse(raw);
-    } catch(e) {}
-  }
-  pl = pl || S.packingList || [];
-
-  // ── 2. Filtrer les scans supprimés (qty_pos=0 ET qty_neg=0 = jamais scanné) ──
+// ── Fonction partagée : ajoute les feuilles d'une session à un workbook existant ──
+async function addSessionToWorkbook(wb, session, scans, pl, sheetPrefix) {
+  // pl déjà résolu par l'appelant — on l'utilise directement
+  pl = pl || [];
   scans = (scans || []).filter(sc => (sc.qty_pos||0) > 0 || (sc.qty_neg||0) > 0);
-
-  const wb = new ExcelJS.Workbook();
-  wb.creator = 'Stock-Logistique';
-  wb.created = new Date();
 
   // ── Helpers styles ──
   const C = {
@@ -671,7 +725,8 @@ async function exportExcelSession(session, scans, pl) {
   });
 
   // ── FEUILLE RAPPORT ──
-  const ws = wb.addWorksheet('Rapport session', {views:[{showGridLines:false}]});
+  const _sheetBase = sheetPrefix ? sheetPrefix.replace(/[^a-zA-Z0-9 _]/g,'').trim().substring(0,25) : 'Rapport session';
+  const ws = wb.addWorksheet(_sheetBase, {views:[{showGridLines:false}]});
   ws.columns = [
     {width:10},{width:26},{width:22},{width:12},
     {width:10},{width:10},{width:10},{width:10},{width:16}
@@ -916,7 +971,7 @@ async function exportExcelSession(session, scans, pl) {
   // ── FEUILLE NON ATTENDUS ──
   const nonAttendu = scans.filter(sc => pl.length>0 && !pl.find(p=>p.sku===sc.sku) && (sc.qty_pos||0)>0);
   if (nonAttendu.length) {
-    const ws2 = wb.addWorksheet('Non attendus', {views:[{showGridLines:false}]});
+    const ws2 = wb.addWorksheet((_sheetBase+' - Non attendus').substring(0,31), {views:[{showGridLines:false}]});
     ws2.columns = [{width:28},{width:12},{width:22},{width:16}];
     const t2 = ws2.addRow(['Articles non attendus (hors packing list)']);
     ws2.mergeCells(1,1,1,4); t2.height=22;
@@ -936,7 +991,7 @@ async function exportExcelSession(session, scans, pl) {
   // ── FEUILLE DÉFECTUEUX ──
   const defSession = S.defectueux.filter(d=>d.session_id===session.id);
   if (defSession.length) {
-    const ws3 = wb.addWorksheet('Defectueux', {views:[{showGridLines:false}]});
+    const ws3 = wb.addWorksheet((_sheetBase+' - Def').substring(0,31), {views:[{showGridLines:false}]});
     ws3.columns = [{width:28},{width:12},{width:22},{width:18},{width:30},{width:16}];
     const t3=ws3.addRow(['Articles defectueux']);
     ws3.mergeCells(1,1,1,6); t3.height=22;
@@ -954,7 +1009,7 @@ async function exportExcelSession(session, scans, pl) {
 
   // ── FEUILLE PACKING LIST (référence) ──
   if (pl.length > 0) {
-    const ws4 = wb.addWorksheet('Packing list', {views:[{showGridLines:false}]});
+    const ws4 = wb.addWorksheet((_sheetBase+' - PL').substring(0,31), {views:[{showGridLines:false}]});
     ws4.columns = [{width:28},{width:12},{width:22},{width:12}];
     const t4=ws4.addRow(['Packing list de reference — ' + session.nom]);
     ws4.mergeCells(1,1,1,4); t4.height=22;
@@ -977,7 +1032,18 @@ async function exportExcelSession(session, scans, pl) {
     applyRow(plTot,C.totalBg,C.totalFg,true,11,true);
   }
 
-  // ── TÉLÉCHARGEMENT ──
+}
+
+async function exportExcelSession(session, scans, pl) {
+  // Récupérer la PL depuis localStorage ou état courant
+  if (!pl || pl.length === 0) {
+    try { const raw = localStorage.getItem('pl_' + session.id); if (raw) pl = JSON.parse(raw); } catch(e) {}
+  }
+  if (!pl || pl.length === 0) pl = S.packingList || [];
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Stock-Logistique';
+  wb.created = new Date();
+  await addSessionToWorkbook(wb, session, scans, pl);
   const buf = await wb.xlsx.writeBuffer();
   const blob = new Blob([buf], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
   const url = URL.createObjectURL(blob);
@@ -1501,6 +1567,11 @@ function renderSessionsList(container) {
 
 function renderSessions() {
   const filtered = S.sessions.filter(s => !S.searchSess || s.nom.toLowerCase().includes(S.searchSess.toLowerCase()));
+  const folders = S.folders || [];
+  // Sessions sans dossier
+  const allFolderSessionIds = folders.flatMap(f => f.sessionIds);
+  const sessionsHorsDossier = filtered.filter(s => !allFolderSessionIds.includes(s.id));
+
   return h('div', {class: 'page'},
     h('div', {class: 'page-hd'},
       h('h2', {}, '📁 Sessions'),
@@ -1513,18 +1584,61 @@ function renderSessions() {
             if (list) renderSessionsList(list);
           }
         }),
+        h('button', {class: 'btn btn-primary btn-sm', onClick: () => set({mNewFolder: true})}, '📁 Nouveau dossier'),
         h('button', {class: 'btn btn-outline btn-sm', onClick: () => { loadSessions().then(exportExcelAll); }}, '⬇ Export tout')
       )
     ),
     S.loadingSess ? h('div', {class: 'loading'}, h('div', {class: 'spinner'}), 'Chargement…') :
-    filtered.length === 0 ? h('div', {class: 'empty'}, h('div', {class: 'empty-icon'}, '📁'), h('div', {}, 'Aucune session')) :
     h('div', {class: 'page-body', style: 'padding:16px 20px', id: 'sessList'},
-      ...filtered.map(s => {
-        const scans = s.scans || [];
-        const totalPos = scans.reduce((a, sc) => a + (sc.qty_pos || 0), 0);
-        const totalNeg = scans.reduce((a, sc) => a + (sc.qty_neg || 0), 0);
-        const expanded = S.expandedSession === s.id;
-        return h('div', {class: 'sess-card'},
+      // ── Dossiers ──
+      ...folders.map(folder => {
+        const folderSessions = S.sessions.filter(s => folder.sessionIds.includes(s.id));
+        const folderOpen = S.expandedFolder === folder.id;
+        return h('div', {style: 'margin-bottom:12px'},
+          // En-tête dossier
+          h('div', {style: 'display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--surface);border:2px solid var(--acc-light);border-radius:var(--radius-lg);cursor:pointer',
+            onClick: () => set({expandedFolder: folderOpen ? null : folder.id})},
+            h('span', {style: 'font-size:16px'}, '📁'),
+            h('span', {style: 'font-weight:700;font-size:14px;flex:1;color:var(--acc)'}, folder.nom),
+            h('span', {style: 'font-size:12px;color:var(--muted)'}, folderSessions.length + ' session' + (folderSessions.length!==1?'s':'')),
+            h('button', {class: 'btn btn-success btn-sm', onClick: async e => { e.stopPropagation(); await exportExcelFolder(folder); }}, '⬇ Export dossier'),
+            h('button', {class: 'btn btn-danger btn-sm', onClick: e => {
+              e.stopPropagation();
+              if (confirm('Supprimer le dossier "' + folder.nom + '" ? (les sessions ne seront pas supprimées)')) deleteFolder(folder.id);
+            }}, '🗑'),
+            h('span', {style: 'color:var(--muted);font-size:12px'}, folderOpen ? '▲' : '▼')
+          ),
+          // Sessions dans le dossier
+          folderOpen ? h('div', {style: 'padding-left:16px;margin-top:6px'},
+            folderSessions.length === 0 ? h('div', {style: 'color:var(--muted);font-size:13px;padding:12px;text-align:center;border:1px dashed var(--border2);border-radius:var(--radius)'}, 'Aucune session dans ce dossier') :
+            h('div', {},
+              ...folderSessions.map(s => renderSessCard(s, folder.id))
+            )
+          ) : null
+        );
+      }),
+      // Séparateur si dossiers + sessions libres
+      folders.length > 0 && sessionsHorsDossier.length > 0 ? h('div', {style: 'display:flex;align-items:center;gap:10px;margin:16px 0'},
+        h('div', {style: 'flex:1;height:1px;background:var(--border)'}),
+        h('span', {style: 'font-size:12px;color:var(--muted);white-space:nowrap'},'Sessions sans dossier'),
+        h('div', {style: 'flex:1;height:1px;background:var(--border)'})
+      ) : null,
+      // Sessions sans dossier
+      sessionsHorsDossier.length === 0 && folders.length === 0 ? h('div', {class: 'empty'}, h('div', {class: 'empty-icon'}, '📁'), h('div', {}, 'Aucune session')) :
+      h('div', {}, ...sessionsHorsDossier.map(s => renderSessCard(s, null)))
+    )
+  );
+}
+
+// ── Carte session (factorisée) ──
+function renderSessCard(s, folderId) {
+  const scans = s.scans || [];
+  const totalPos = scans.reduce((a, sc) => a + (sc.qty_pos || 0), 0);
+  const totalNeg = scans.reduce((a, sc) => a + (sc.qty_neg || 0), 0);
+  const expanded = S.expandedSession === s.id;
+  // Liste des dossiers disponibles pour cet ajout
+  const folders2 = S.folders || [];
+  return h('div', {class: 'sess-card'},
           h('div', {class: 'sess-card-hd', onClick: () => set({expandedSession: expanded ? null : s.id})},
             h('div', {style: 'flex:1'},
               h('div', {style: 'display:flex;align-items:center;gap:6px'},
@@ -1557,6 +1671,12 @@ function renderSessions() {
                 set({page: 'scanner', session: {...s, status: 'active'}, scans: scansData, history: [], packingList: null});
               }}, '▶ Reprendre') : null,
               h('button', {class: 'btn btn-outline btn-sm', onClick: e => { e.stopPropagation(); exportExcelSession(s, scans, null); }}, '⬇'),
+              // Bouton dossier
+              folderId ?
+                h('button', {class: 'btn btn-ghost btn-sm', style: 'font-size:11px', title: 'Retirer du dossier',
+                  onClick: e => { e.stopPropagation(); removeFromFolder(folderId, s.id); }}, '📁✕') :
+                folders2.length > 0 ? h('button', {class: 'btn btn-ghost btn-sm', style: 'font-size:11px', title: 'Ajouter à un dossier',
+                  onClick: e => { e.stopPropagation(); set({mAddToFolder: {sessionId: s.id}}); }}, '📁+') : null,
               h('button', {class: 'btn btn-danger btn-sm', onClick: async e => {
                 e.stopPropagation();
                 const msg = s.status === 'active' ? 'Supprimer cette session active ?' : 'Supprimer cette session ?';
@@ -1803,9 +1923,6 @@ function renderSessions() {
               )
             )
           ) : null
-        );
-      })
-    )
   );
 }
 
@@ -2598,6 +2715,58 @@ function renderModalSessPL() {
   );
 }
 
+// ── MODAL NOUVEAU DOSSIER ─────────────────────────────────────────────────
+function renderModalNewFolder() {
+  if (!S.mNewFolder) return null;
+  return h('div', {class: 'modal-overlay', onClick: e => { if(e.target.className==='modal-overlay') set({mNewFolder:false}); }},
+    h('div', {class: 'modal modal-sm'},
+      h('div', {class: 'modal-hd'}, h('h3', {}, '📁 Nouveau dossier'), h('button', {class: 'modal-close', onClick: ()=>set({mNewFolder:false})}, '×')),
+      h('div', {class: 'modal-body'},
+        h('div', {class: 'form-row'}, h('label', {}, 'Nom du dossier'), h('input', {type:'text', id:'newFolderNom', placeholder:'ex: Réception 03 avril…'}))
+      ),
+      h('div', {class: 'modal-ft'},
+        h('button', {class: 'btn btn-outline', onClick: ()=>set({mNewFolder:false})}, 'Annuler'),
+        h('button', {class: 'btn btn-primary', onClick: ()=>{
+          const nom = document.getElementById('newFolderNom')?.value?.trim();
+          if (!nom) return alert('Nom requis');
+          createFolder(nom);
+        }}, '✓ Créer')
+      )
+    )
+  );
+}
+
+// ── MODAL AJOUTER AU DOSSIER ──────────────────────────────────────────────
+function renderModalAddToFolder() {
+  if (!S.mAddToFolder) return null;
+  const {sessionId} = S.mAddToFolder;
+  const folders = S.folders || [];
+  const sess = S.sessions.find(s => s.id === sessionId);
+  return h('div', {class: 'modal-overlay', onClick: e => { if(e.target.className==='modal-overlay') set({mAddToFolder:null}); }},
+    h('div', {class: 'modal modal-sm'},
+      h('div', {class: 'modal-hd'}, h('h3', {}, '📁 Ajouter au dossier'), h('button', {class: 'modal-close', onClick: ()=>set({mAddToFolder:null})}, '×')),
+      h('div', {class: 'modal-body'},
+        h('div', {class: 'alert alert-info', style:'margin-bottom:14px'}, h('strong', {}, sess?.nom || 'Session')),
+        h('div', {style:'display:flex;flex-direction:column;gap:8px'},
+          ...folders.map(f => h('button', {
+            class: 'close-opt',
+            onClick: () => addToFolder(f.id, sessionId)
+          },
+            h('span', {class: 'close-opt-icon'}, '📁'),
+            h('div', {},
+              h('div', {class: 'close-opt-title'}, f.nom),
+              h('div', {class: 'close-opt-sub'}, f.sessionIds.length + ' session' + (f.sessionIds.length!==1?'s':''))
+            )
+          ))
+        )
+      ),
+      h('div', {class: 'modal-ft'},
+        h('button', {class: 'btn btn-outline', onClick: ()=>set({mAddToFolder:null})}, 'Annuler')
+      )
+    )
+  );
+}
+
 // ── RENDER ────────────────────────────────────────────────────────────────
 function render() {
   const app = document.getElementById('app');
@@ -2619,7 +2788,7 @@ function render() {
   else if (S.page === 'defectueux') page = renderDefectueux();
   else if (S.page === 'catalogue') page = renderCatalogue();
   if (page) app.appendChild(page);
-  [renderModalConfirmClose(), renderModalPacking(), renderModalDefect(), renderModalEditScan(), renderModalEditSessionName(), renderModalEditSessionScan(), renderModalSessPL(), renderModalAddProd(), renderModalCsv()]
+  [renderModalConfirmClose(), renderModalPacking(), renderModalDefect(), renderModalEditScan(), renderModalEditSessionName(), renderModalEditSessionScan(), renderModalSessPL(), renderModalNewFolder(), renderModalAddToFolder(), renderModalAddProd(), renderModalCsv()]
     .filter(Boolean).forEach(m => app.appendChild(m));
   if (S.page === 'scanner' && S.session) setTimeout(() => document.getElementById('scanInput')?.focus(), 50);
   // Restaurer les positions de scroll après reconstruction
