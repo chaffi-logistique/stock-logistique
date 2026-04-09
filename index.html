@@ -340,6 +340,7 @@ let S = {
   expandedSession: null,
   mEditSessionName: null, // {id, nom} pour éditer le titre
   mEditSessionScan: null, // {scan, sessionId} pour éditer un scan historique
+  mEditSessionNote: null, // {sessionId, nom} pour éditer la note
   sessAddSearch: {}, // {sessionId: searchTerm} pour l'ajout d'article
   sessAddSuggest: {}, // {sessionId: [produits]}
   mSessPL: null, // {sessionId, key, current} pour éditer la PL d'une session
@@ -372,9 +373,19 @@ async function loadCatalogue() {
   set({catalogue: data || []});
 }
 async function loadSessions() {
+  // Sauvegarder la position de scroll avant rechargement
+  const _scrollPos = document.getElementById('sessList')?.scrollTop || 0;
+  const _pageScroll = document.querySelector('.page-body')?.scrollTop || 0;
   set({loadingSess: true});
   const {data} = await db.from('sessions').select('*,scans(*)').order('created_at', {ascending: false});
   set({sessions: data || [], loadingSess: false});
+  // Restaurer le scroll après reconstruction du DOM
+  requestAnimationFrame(() => {
+    const list = document.getElementById('sessList');
+    if (list && _scrollPos) list.scrollTop = _scrollPos;
+    const pb = document.querySelector('.page-body');
+    if (pb && _pageScroll) pb.scrollTop = _pageScroll;
+  });
   // Si une session est active en cours, restaurer la PL depuis localStorage
   if (S.session && !S.packingList) {
     try {
@@ -417,18 +428,34 @@ async function dbDeleteSession(id) {
   await db.from('sessions').delete().eq('id', id);
 }
 async function dbUpsertScan(sessionId, scan) {
-  if (scan._dbId) {
-    await db.from('scans').update({qty_pos: scan.qty_pos, qty_neg: scan.qty_neg}).eq('id', scan._dbId);
+  // Accepter _dbId ou id (scans chargés depuis Supabase ont 'id')
+  const existingId = scan._dbId || scan.id;
+  if (existingId) {
+    await db.from('scans').update({qty_pos: scan.qty_pos, qty_neg: scan.qty_neg}).eq('id', existingId);
+    if (!scan._dbId) scan._dbId = existingId; // normaliser
   } else {
-    const {data} = await db.from('scans').insert({
-      session_id: sessionId, sku: scan.sku, nom: scan.nom,
-      qty_pos: scan.qty_pos, qty_neg: scan.qty_neg
-    }).select().single();
-    if (data) scan._dbId = data.id;
+    // Vérifier si un scan existe déjà en base pour éviter les doublons
+    const {data: existing} = await db.from('scans').select('id').eq('session_id', sessionId).eq('sku', scan.sku).single();
+    if (existing) {
+      await db.from('scans').update({qty_pos: scan.qty_pos, qty_neg: scan.qty_neg}).eq('id', existing.id);
+      scan._dbId = existing.id;
+    } else {
+      const {data} = await db.from('scans').insert({
+        session_id: sessionId, sku: scan.sku, nom: scan.nom,
+        qty_pos: scan.qty_pos, qty_neg: scan.qty_neg
+      }).select().single();
+      if (data) scan._dbId = data.id;
+    }
   }
 }
 async function dbUpdateSessionName(id, nom) {
   await db.from('sessions').update({nom}).eq('id', id);
+}
+function getSessionNote(sessionId) {
+  try { return localStorage.getItem('note_sess_' + sessionId) || ''; } catch(e) { return ''; }
+}
+function saveSessionNote(sessionId, note) {
+  try { localStorage.setItem('note_sess_' + sessionId, note); } catch(e) {}
 }
 async function dbDeleteScan(scanId) {
   await db.from('scans').delete().eq('id', scanId);
@@ -1462,7 +1489,17 @@ function renderScanner() {
         h('td', {},
           h('div', {class: 'inline-qty'},
             session ? h('button', {class: 'iqty-btn', style: 'color:var(--red)', onClick: () => quickAdj(row.sku, -1)}, '−') : null,
-            h('span', {class: 'iqty-val', style: (row.qty_pos||0)>0?'color:var(--text)':'color:var(--muted)'}, row.qty_pos || 0),
+            h('input', {
+              type: 'number', min: '0',
+              style: 'width:48px;text-align:center;font-family:var(--mono);font-weight:700;font-size:13px;padding:2px 4px;min-height:26px;border:1px solid var(--border2);border-radius:4px',
+              value: row.qty_pos || 0,
+              onChange: e => {
+                if (!session) return;
+                const val = Math.max(0, parseInt(e.target.value) || 0);
+                const sc = S.scans.find(s => s.sku === row.sku);
+                if (sc) { sc.qty_pos = val; dbUpsertScan(session.id, sc); set({scans:[...S.scans]}); }
+              }
+            }),
             session ? h('button', {class: 'iqty-btn', style: 'color:var(--green)', onClick: () => quickAdj(row.sku, 1)}, '+') : null,
             (row.qty_neg||0) > 0 ? h('span', {style: 'color:var(--red);font-size:11px;margin-left:2px'}, '-'+(row.qty_neg||0)) : null
           )
@@ -1648,6 +1685,15 @@ function renderSessCard(s, folderId) {
                   onClick: e => { e.stopPropagation(); set({mEditSessionName: {id: s.id, nom: s.nom}}); }
                 }, '✏')
               ),
+              (() => {
+                const note = getSessionNote(s.id);
+                return h('div', {style: 'display:flex;align-items:center;gap:4px;margin-top:3px'},
+                  note ? h('span', {style: 'font-size:11px;color:var(--muted);font-style:italic;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'}, '📝 ' + note) : null,
+                  h('button', {class: 'btn btn-ghost btn-sm', style: 'padding:1px 5px;font-size:10px;color:var(--muted)',
+                    onClick: e => { e.stopPropagation(); set({mEditSessionNote: {sessionId: s.id, note: getSessionNote(s.id)}}); }
+                  }, note ? '✏' : '+ Note')
+                );
+              })(),
               h('div', {style: 'display:flex;gap:6px;align-items:center;margin-top:4px;flex-wrap:wrap'},
                 h('span', {class: 'badge ' + (s.status === 'active' ? 'badge-green' : s.status === 'paused' ? 'badge-yellow' : 'badge-gray')}, s.status === 'active' ? '● Actif' : s.status === 'paused' ? '⏸ En pause' : 'Clôturé'),
                 h('span', {class: 'badge badge-blue'}, MODES.find(m => m.id === s.mode)?.label || s.mode || '—'),
@@ -1765,12 +1811,16 @@ function renderSessCard(s, folderId) {
                                 qty_pos: 1, qty_neg: 0
                               });
                             }
-                            // Reset champ
+                            // Mise à jour immédiate de S.sessions
+                            const newData = await db.from('sessions').select('*,scans(*)').eq('id', s.id).single();
+                            if (newData.data) {
+                              S.sessions = S.sessions.map(sess => sess.id === s.id ? newData.data : sess);
+                            }
                             const inp = document.getElementById('sessAdd_' + s.id);
                             if (inp) inp.value = '';
                             box.style.display = 'none';
                             S.sessAddSearch = {...S.sessAddSearch, [s.id]: ''};
-                            loadSessions();
+                            set({sessions: [...S.sessions]});
                           }
                         },
                           p.image_url ? h('img', {src: p.image_url, style: 'width:26px;height:26px;object-fit:cover;border-radius:4px;flex-shrink:0'}) : h('span', {style: 'font-size:16px'}, '📦'),
@@ -2537,23 +2587,35 @@ function renderModalEditSessionScan() {
       h('div', {class: 'modal-ft'},
         h('button', {class: 'btn btn-danger', style: 'margin-right:auto', onClick: async () => {
           if (!confirm('Supprimer ce scan de la session ?')) return;
-          if (scan.id) await dbDeleteScan(scan.id);
-          set({mEditSessionScan: null});
-          loadSessions();
+          const delId = scan._dbId || scan.id;
+          if (!delId) return alert('ID du scan introuvable.');
+          await db.from('scans').delete().eq('id', delId);
+          // Recharger uniquement cette session
+          const {data: freshSess} = await db.from('sessions').select('*,scans(*)').eq('id', sessionId).single();
+          if (freshSess) {
+            S.sessions = S.sessions.map(sess => String(sess.id) === String(sessionId) ? freshSess : sess);
+          }
+          set({mEditSessionScan: null, sessions: [...S.sessions]});
         }}, '🗑 Supprimer'),
         h('button', {class: 'btn btn-outline', onClick: () => set({mEditSessionScan: null})}, 'Annuler'),
         h('button', {class: 'btn btn-primary', onClick: async () => {
-          const nom    = document.getElementById('escan-nom')?.value?.trim();
-          const taille = document.getElementById('escan-taille')?.value?.trim();
-          const sku    = document.getElementById('escan-sku')?.value?.trim().toUpperCase();
+          const nom    = document.getElementById('escan-nom')?.value?.trim() || scan.nom;
+          const taille = document.getElementById('escan-taille')?.value?.trim() || '';
+          const sku    = document.getElementById('escan-sku')?.value?.trim().toUpperCase() || scan.sku;
           const pos    = parseInt(document.getElementById('escan-pos')?.value) || 0;
           const neg    = parseInt(document.getElementById('escan-neg')?.value) || 0;
           if (!sku) return alert('SKU requis');
-          if (scan.id) {
-            await dbUpdateScan(scan.id, {nom: nom||scan.nom, taille: taille||null, sku, qty_pos: pos, qty_neg: neg});
+          // Essayer toutes les formes d'ID possibles
+          const scanDbId = scan._dbId || scan.id;
+          if (!scanDbId) return alert('ID du scan introuvable, impossible de modifier.');
+          const {error} = await db.from('scans').update({nom, qty_pos: pos, qty_neg: neg}).eq('id', scanDbId);
+          if (error) { alert('Erreur Supabase : ' + error.message); return; }
+          // Recharger uniquement cette session depuis Supabase
+          const {data: freshSess} = await db.from('sessions').select('*,scans(*)').eq('id', sessionId).single();
+          if (freshSess) {
+            S.sessions = S.sessions.map(sess => String(sess.id) === String(sessionId) ? freshSess : sess);
           }
-          set({mEditSessionScan: null});
-          loadSessions();
+          set({mEditSessionScan: null, sessions: [...S.sessions]});
         }}, '✓ Enregistrer')
       )
     )
@@ -2767,6 +2829,39 @@ function renderModalAddToFolder() {
   );
 }
 
+// ── MODAL NOTE SESSION ────────────────────────────────────────────────────
+function renderModalEditSessionNote() {
+  if (!S.mEditSessionNote) return null;
+  const {sessionId, note} = S.mEditSessionNote;
+  const sess = S.sessions.find(s => s.id === sessionId);
+  return h('div', {class: 'modal-overlay', onClick: e => { if (e.target.className === 'modal-overlay') set({mEditSessionNote: null}); }},
+    h('div', {class: 'modal modal-sm'},
+      h('div', {class: 'modal-hd'},
+        h('h3', {}, '📝 Note — ' + (sess?.nom || 'Session')),
+        h('button', {class: 'modal-close', onClick: () => set({mEditSessionNote: null})}, '×')
+      ),
+      h('div', {class: 'modal-body'},
+        h('div', {class: 'form-row'},
+          h('label', {}, 'Note libre (visible dans l\'historique)'),
+          h('textarea', {rows: '4', id: 'sess-note-input', placeholder: 'Ex: Session officielle, Fast test...', html: note || ''})
+        )
+      ),
+      h('div', {class: 'modal-ft'},
+        note ? h('button', {class: 'btn btn-danger', onClick: () => {
+          saveSessionNote(sessionId, '');
+          set({mEditSessionNote: null});
+        }}, '🗑 Supprimer') : null,
+        h('button', {class: 'btn btn-outline', onClick: () => set({mEditSessionNote: null})}, 'Annuler'),
+        h('button', {class: 'btn btn-primary', onClick: () => {
+          const val = document.getElementById('sess-note-input')?.value?.trim() || '';
+          saveSessionNote(sessionId, val);
+          set({mEditSessionNote: null});
+        }}, '✓ Enregistrer')
+      )
+    )
+  );
+}
+
 // ── RENDER ────────────────────────────────────────────────────────────────
 function render() {
   const app = document.getElementById('app');
@@ -2788,7 +2883,7 @@ function render() {
   else if (S.page === 'defectueux') page = renderDefectueux();
   else if (S.page === 'catalogue') page = renderCatalogue();
   if (page) app.appendChild(page);
-  [renderModalConfirmClose(), renderModalPacking(), renderModalDefect(), renderModalEditScan(), renderModalEditSessionName(), renderModalEditSessionScan(), renderModalSessPL(), renderModalNewFolder(), renderModalAddToFolder(), renderModalAddProd(), renderModalCsv()]
+  [renderModalConfirmClose(), renderModalPacking(), renderModalDefect(), renderModalEditScan(), renderModalEditSessionName(), renderModalEditSessionScan(), renderModalEditSessionNote(), renderModalSessPL(), renderModalNewFolder(), renderModalAddToFolder(), renderModalAddProd(), renderModalCsv()]
     .filter(Boolean).forEach(m => app.appendChild(m));
   if (S.page === 'scanner' && S.session) setTimeout(() => document.getElementById('scanInput')?.focus(), 50);
   // Restaurer les positions de scroll après reconstruction
