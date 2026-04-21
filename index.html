@@ -344,7 +344,7 @@ let S = {
   sessAddSearch: {}, // {sessionId: searchTerm} pour l'ajout d'article
   sessAddSuggest: {}, // {sessionId: [produits]}
   mSessPL: null, // {sessionId, key, current} pour éditer la PL d'une session
-  folders: JSON.parse(localStorage.getItem('sl_folders') || '[]'),
+  folders: [],
   mNewFolder: false,
   expandedFolder: null,
   mAddToFolder: null, // {sessionId} pour choisir un dossier
@@ -468,39 +468,56 @@ async function dbSaveDefect(sku, nom, type, note, sessionId) {
 }
 
 // ── DOSSIERS (localStorage) ──────────────────────────────────────────────
-function getFolders() {
-  try { return JSON.parse(localStorage.getItem('sl_folders') || '[]'); } catch(e) { return []; }
+// ── Dossiers — stockés dans Supabase ──
+async function loadFolders() {
+  try {
+    const {data} = await db.from('folders').select('*').order('created_at', {ascending: true});
+    const folders = (data || []).map(f => ({
+      id: f.id, nom: f.nom,
+      sessionIds: Array.isArray(f.session_ids) ? f.session_ids : (f.session_ids || [])
+    }));
+    S.folders = folders;
+    set({folders: [...folders]});
+  } catch(e) {
+    // Fallback localStorage si table pas encore dispo
+    try { S.folders = JSON.parse(localStorage.getItem('sl_folders') || '[]'); } catch(e2) {}
+  }
 }
-function saveFolders(folders) {
-  localStorage.setItem('sl_folders', JSON.stringify(folders));
-  S.folders = folders;
-}
-function createFolder(nom) {
-  const folders = getFolders();
+async function createFolder(nom) {
   const id = 'folder_' + Date.now();
-  folders.push({id, nom, sessionIds: []});
-  saveFolders(folders);
-  set({folders: [...folders], mNewFolder: false});
+  await db.from('folders').insert({id, nom, session_ids: []});
+  await loadFolders();
+  set({mNewFolder: false});
 }
-function deleteFolder(id) {
-  const folders = getFolders().filter(f => f.id !== id);
-  saveFolders(folders);
-  set({folders: [...folders]});
+async function deleteFolder(id) {
+  await db.from('folders').delete().eq('id', id);
+  await loadFolders();
 }
-function addToFolder(folderId, sessionId) {
-  const folders = getFolders();
-  folders.forEach(f => { f.sessionIds = f.sessionIds.filter(id => id !== sessionId); }); // retirer d'autres dossiers
-  const folder = folders.find(f => f.id === folderId);
-  if (folder && !folder.sessionIds.includes(sessionId)) folder.sessionIds.push(sessionId);
-  saveFolders(folders);
-  set({folders: [...folders], mAddToFolder: null});
+async function addToFolder(folderId, sessionId) {
+  // Retirer de tous les autres dossiers
+  const folders = S.folders || [];
+  for (const f of folders) {
+    if (f.id !== folderId && f.sessionIds.includes(sessionId)) {
+      const newIds = f.sessionIds.filter(id => id !== sessionId);
+      await db.from('folders').update({session_ids: newIds}).eq('id', f.id);
+    }
+  }
+  // Ajouter au dossier cible
+  const target = folders.find(f => f.id === folderId);
+  if (target) {
+    const newIds = target.sessionIds.includes(sessionId) ? target.sessionIds : [...target.sessionIds, sessionId];
+    await db.from('folders').update({session_ids: newIds}).eq('id', folderId);
+  }
+  await loadFolders();
+  set({mAddToFolder: null});
 }
-function removeFromFolder(folderId, sessionId) {
-  const folders = getFolders();
-  const folder = folders.find(f => f.id === folderId);
-  if (folder) folder.sessionIds = folder.sessionIds.filter(id => id !== sessionId);
-  saveFolders(folders);
-  set({folders: [...folders]});
+async function removeFromFolder(folderId, sessionId) {
+  const folder = (S.folders || []).find(f => f.id === folderId);
+  if (folder) {
+    const newIds = folder.sessionIds.filter(id => id !== sessionId);
+    await db.from('folders').update({session_ids: newIds}).eq('id', folderId);
+  }
+  await loadFolders();
 }
 async function exportExcelFolder(folder) {
   const sessions = S.sessions.filter(s => folder.sessionIds.map(String).includes(String(s.id)));
@@ -1168,7 +1185,7 @@ function renderNav() {
       class: 'ntab' + (S.page === t.id ? ' active' : ''),
       onClick: () => {
         set({page: t.id});
-        if (t.id === 'sessions') loadSessions();
+        if (t.id === 'sessions') { loadSessions(); loadFolders(); }
         if (t.id === 'defectueux') loadDefectueux();
         if (t.id === 'catalogue') loadCatalogue();
       }
@@ -1639,9 +1656,9 @@ function renderSessions() {
             h('span', {style: 'font-weight:700;font-size:14px;flex:1;color:var(--acc)'}, folder.nom),
             h('span', {style: 'font-size:12px;color:var(--muted)'}, folderSessions.length + ' session' + (folderSessions.length!==1?'s':'')),
             h('button', {class: 'btn btn-success btn-sm', onClick: async e => { e.stopPropagation(); await exportExcelFolder(folder); }}, '⬇ Export dossier'),
-            h('button', {class: 'btn btn-danger btn-sm', onClick: e => {
+            h('button', {class: 'btn btn-danger btn-sm', onClick: async e => {
               e.stopPropagation();
-              if (confirm('Supprimer le dossier "' + folder.nom + '" ? (les sessions ne seront pas supprimées)')) deleteFolder(folder.id);
+              if (confirm('Supprimer le dossier "' + folder.nom + '" ? (les sessions ne seront pas supprimées)')) await deleteFolder(folder.id);
             }}, '🗑'),
             h('span', {style: 'color:var(--muted);font-size:12px'}, folderOpen ? '▲' : '▼')
           ),
@@ -1720,7 +1737,7 @@ function renderSessCard(s, folderId) {
               // Bouton dossier
               folderId ?
                 h('button', {class: 'btn btn-ghost btn-sm', style: 'font-size:11px', title: 'Retirer du dossier',
-                  onClick: e => { e.stopPropagation(); removeFromFolder(folderId, s.id); }}, '📁✕') :
+                  onClick: async e => { e.stopPropagation(); await removeFromFolder(folderId, s.id); }}, '📁✕') :
                 folders2.length > 0 ? h('button', {class: 'btn btn-ghost btn-sm', style: 'font-size:11px', title: 'Ajouter à un dossier',
                   onClick: e => { e.stopPropagation(); set({mAddToFolder: {sessionId: s.id}}); }}, '📁+') : null,
               h('button', {class: 'btn btn-danger btn-sm', onClick: async e => {
@@ -2812,7 +2829,7 @@ function renderModalAddToFolder() {
         h('div', {style:'display:flex;flex-direction:column;gap:8px'},
           ...folders.map(f => h('button', {
             class: 'close-opt',
-            onClick: () => addToFolder(f.id, sessionId)
+            onClick: async () => { await addToFolder(f.id, sessionId); }
           },
             h('span', {class: 'close-opt-icon'}, '📁'),
             h('div', {},
@@ -2901,7 +2918,7 @@ function render() {
 }
 
 render();
-if (S.authed) { loadCatalogue(); loadSessions(); loadDefectueux(); }
+if (S.authed) { loadCatalogue(); loadSessions(); loadDefectueux(); loadFolders(); }
 
 // ── CTRL+Z global ─────────────────────────────────────────────────────────
 document.addEventListener('keydown', e => {
