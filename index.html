@@ -278,10 +278,71 @@ label{font-size:11px;font-weight:600;color:var(--muted);display:block;margin-bot
 .group-total{font-family:var(--mono);font-size:12px;font-weight:600}
 
 @media(max-width:768px){
-  .scanner-sidebar{width:100%;border-right:none;border-bottom:1px solid var(--border);max-height:55vh}
+  /* Layout */
+  .scanner-sidebar{width:100%;border-right:none;border-bottom:1px solid var(--border);max-height:52vh;overflow-y:auto}
   .scanner-wrap{flex-direction:column}
+  .page-body{padding:8px}
+
+  /* Navbar */
+  .navbar{padding:0 6px;gap:4px}
+  .nav-brand{font-size:13px}
+  .nav-tab{padding:6px 8px;font-size:11px}
+  .nav-session-info{font-size:11px;padding:4px 8px}
+
+  /* Sidebar */
+  .sb-section{padding:8px}
+  .mode-grid{grid-template-columns:1fr 1fr}
+  .mode-card{padding:8px 6px}
+  .mode-card-icon{font-size:18px}
+  .mode-card-sub{display:none}
+  .scan-box input{font-size:16px !important}
+  .scan-btn{padding:10px 12px;font-size:13px}
+  .counter-grid{grid-template-columns:1fr 1fr}
+  .counter-box{padding:8px}
+  .counter-val{font-size:20px}
+
+  /* Packing list — bouton bien visible sur mobile */
+  .pl-toggle-mobile{display:flex !important}
+  .packing-list-section{border-radius:10px;margin:0 0 8px 0}
+  .pl-line{flex-wrap:nowrap;gap:6px;padding:8px 6px}
+  .pl-line-nom{font-size:12px}
+  .qty-input{width:52px;min-height:36px;font-size:15px}
+  .qty-ctrl{gap:4px}
+
+  /* Topbar scanner */
+  .main-topbar{padding:8px;gap:6px;flex-wrap:wrap}
+  .filter-tabs{gap:2px}
+  .ftab{padding:4px 8px;font-size:11px}
+
+  /* Tableau */
   .scan-table th:nth-child(3),.scan-table td:nth-child(3),
-  .scan-table th:nth-child(4),.scan-table td:nth-child(4){display:none}
+  .scan-table th:nth-child(4),.scan-table td:nth-child(4),
+  .scan-table th:nth-child(9),.scan-table td:nth-child(9){display:none}
+  .scan-table th,.scan-table td{padding:6px 4px;font-size:11px}
+  .iqty-btn{width:28px;height:28px;font-size:16px}
+
+  /* Sessions */
+  .sess-card-hd{flex-wrap:wrap;gap:6px;padding:10px}
+  .sess-card-bd{padding:10px}
+
+  /* Modals */
+  .modal{width:96vw !important;max-width:96vw !important;margin:8px auto;max-height:92vh;overflow-y:auto}
+  .modal-lg{width:96vw !important}
+  .modal-body{padding:10px}
+  .modal-ft{flex-wrap:wrap;gap:6px;padding:10px}
+  .modal-ft .btn{flex:1;min-width:80px;text-align:center;min-height:40px}
+
+  /* Boutons */
+  .btn{min-height:36px}
+  .btn-sm{padding:5px 10px;font-size:12px}
+
+  /* Page Sessions/Dossiers */
+  .page-hd{flex-wrap:wrap;gap:8px;padding:10px}
+  .page-hd h2{font-size:16px}
+}
+
+@media(max-width:480px){
+  .scan-table th:nth-child(5),.scan-table td:nth-child(5){display:none}
 }
 </style>
 </head>
@@ -2903,6 +2964,26 @@ function render() {
   [renderModalConfirmClose(), renderModalPacking(), renderModalDefect(), renderModalEditScan(), renderModalEditSessionName(), renderModalEditSessionScan(), renderModalEditSessionNote(), renderModalSessPL(), renderModalNewFolder(), renderModalAddToFolder(), renderModalAddProd(), renderModalCsv()]
     .filter(Boolean).forEach(m => app.appendChild(m));
   if (S.page === 'scanner' && S.session) setTimeout(() => document.getElementById('scanInput')?.focus(), 50);
+  // Bouton flottant packing list sur mobile
+  if (S.page === 'scanner' && S.session) {
+    const existing = document.getElementById('mobile-pl-fab');
+    if (!existing) {
+      const fab = h('button', {
+        id: 'mobile-pl-fab',
+        style: 'display:none;position:fixed;bottom:20px;right:16px;z-index:999;background:var(--acc);color:#fff;border:none;border-radius:50px;padding:10px 16px;font-size:13px;font-weight:600;box-shadow:0 4px 12px rgba(0,0,0,.3);cursor:pointer',
+        onClick: () => set({mPacking: true})
+      }, '📋 Packing List');
+      document.body.appendChild(fab);
+      // Afficher uniquement sur mobile
+      if (window.innerWidth <= 768) fab.style.display = 'flex';
+      window.addEventListener('resize', () => {
+        fab.style.display = window.innerWidth <= 768 ? 'flex' : 'none';
+      }, {once: false});
+    }
+  } else {
+    const fab = document.getElementById('mobile-pl-fab');
+    if (fab) fab.remove();
+  }
   // Restaurer les positions de scroll après reconstruction
   requestAnimationFrame(() => {
     Object.entries(scrollSave).forEach(([sel, pos]) => {
