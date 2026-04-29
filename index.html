@@ -277,70 +277,69 @@ label{font-size:11px;font-weight:600;color:var(--muted);display:block;margin-bot
 .group-variant:hover td{background:var(--acc-light)}
 .group-total{font-family:var(--mono);font-size:12px;font-weight:600}
 
+.sb-toggle-bar{display:none;align-items:center;justify-content:space-between;background:var(--surface2);border-bottom:1px solid var(--border);padding:7px 12px;cursor:pointer;user-select:none;flex-shrink:0}
+.sb-toggle-bar:active{background:var(--border)}
+.sb-toggle-label{font-size:12px;font-weight:600;color:var(--acc);display:flex;align-items:center;gap:8px}
+.sb-toggle-chevron{font-size:12px;color:var(--muted);transition:transform .25s}
+.sb-toggle-chevron.open{transform:rotate(180deg)}
+.mobile-bottom-bar{display:none;gap:6px;padding:8px 10px;background:var(--surface);border-top:1px solid var(--border);flex-shrink:0}
 @media(max-width:768px){
   /* Layout */
-  .scanner-sidebar{width:100%;border-right:none;border-bottom:1px solid var(--border);max-height:52vh;overflow-y:auto}
+  .scanner-sidebar{width:100%;border-right:none;border-bottom:1px solid var(--border);overflow:hidden;transition:max-height .3s ease}
+  .scanner-sidebar.sb-open{max-height:60vh;overflow-y:auto}
+  .scanner-sidebar.sb-closed{max-height:0;border-bottom:none}
   .scanner-wrap{flex-direction:column}
   .page-body{padding:8px}
-
-  /* Navbar */
-  .navbar{padding:0 6px;gap:4px}
-  .nav-brand{font-size:13px}
-  .nav-tab{padding:6px 8px;font-size:11px}
-  .nav-session-info{font-size:11px;padding:4px 8px}
-
-  /* Sidebar */
-  .sb-section{padding:8px}
+  /* Navbar scrollable */
+  .nav{padding:0 6px;overflow-x:auto;flex-wrap:nowrap;scrollbar-width:none}
+  .nav::-webkit-scrollbar{display:none}
+  .nav-brand{flex-shrink:0;font-size:13px;margin-right:10px}
+  .ntab{flex-shrink:0;padding:6px 10px;font-size:12px}
+  .nav-right{flex-shrink:0}
+  /* Toggle bar et bottom bar visibles */
+  .sb-toggle-bar{display:flex !important}
+  .mobile-bottom-bar{display:flex !important}
+  /* Sidebar inner */
+  .sb-section{padding:8px 10px}
   .mode-grid{grid-template-columns:1fr 1fr}
   .mode-card{padding:8px 6px}
   .mode-card-icon{font-size:18px}
   .mode-card-sub{display:none}
   .scan-box input{font-size:16px !important}
-  .scan-btn{padding:10px 12px;font-size:13px}
+  .scan-btn{padding:10px 12px;font-size:13px;min-height:40px}
   .counter-grid{grid-template-columns:1fr 1fr}
-  .counter-box{padding:8px}
+  .counter-box{padding:7px}
   .counter-val{font-size:20px}
-
-  /* Packing list — bouton bien visible sur mobile */
-  .pl-toggle-mobile{display:flex !important}
-  .packing-list-section{border-radius:10px;margin:0 0 8px 0}
-  .pl-line{flex-wrap:nowrap;gap:6px;padding:8px 6px}
-  .pl-line-nom{font-size:12px}
-  .qty-input{width:52px;min-height:36px;font-size:15px}
-  .qty-ctrl{gap:4px}
-
   /* Topbar scanner */
-  .main-topbar{padding:8px;gap:6px;flex-wrap:wrap}
+  .main-topbar{padding:7px 8px;gap:6px;flex-wrap:wrap}
+  .sess-info{font-size:12px}
   .filter-tabs{gap:2px}
   .ftab{padding:4px 8px;font-size:11px}
-
-  /* Tableau */
+  /* Tableau — cacher colonnes inutiles */
   .scan-table th:nth-child(3),.scan-table td:nth-child(3),
   .scan-table th:nth-child(4),.scan-table td:nth-child(4),
   .scan-table th:nth-child(9),.scan-table td:nth-child(9){display:none}
   .scan-table th,.scan-table td{padding:6px 4px;font-size:11px}
   .iqty-btn{width:28px;height:28px;font-size:16px}
-
   /* Sessions */
   .sess-card-hd{flex-wrap:wrap;gap:6px;padding:10px}
   .sess-card-bd{padding:10px}
-
   /* Modals */
   .modal{width:96vw !important;max-width:96vw !important;margin:8px auto;max-height:92vh;overflow-y:auto}
   .modal-lg{width:96vw !important}
   .modal-body{padding:10px}
   .modal-ft{flex-wrap:wrap;gap:6px;padding:10px}
   .modal-ft .btn{flex:1;min-width:80px;text-align:center;min-height:40px}
-
   /* Boutons */
   .btn{min-height:36px}
   .btn-sm{padding:5px 10px;font-size:12px}
-
-  /* Page Sessions/Dossiers */
+  /* Pages */
   .page-hd{flex-wrap:wrap;gap:8px;padding:10px}
   .page-hd h2{font-size:16px}
+  /* PL */
+  .pl-line{flex-wrap:nowrap;gap:6px;padding:8px 6px}
+  .qty-input{width:52px;min-height:36px;font-size:15px}
 }
-
 @media(max-width:480px){
   .scan-table th:nth-child(5),.scan-table td:nth-child(5){display:none}
 }
@@ -408,7 +407,8 @@ let S = {
   folders: [],
   mNewFolder: false,
   expandedFolder: null,
-  mAddToFolder: null, // {sessionId} pour choisir un dossier
+  mAddToFolder: null,
+  sidebarCollapsed: false, // {sessionId} pour choisir un dossier
   searchCat: '',
   searchSess: '',
   loadingSess: false,
@@ -1273,7 +1273,35 @@ function renderScanner() {
     )
   ) : null;
 
-  const sidebar = h('div', {class: 'scanner-sidebar'},
+  const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
+  const sbOpen = !S.sidebarCollapsed;
+
+  // Barre toggle (visible mobile seulement)
+  const sbToggleBar = h('div', {
+    class: 'sb-toggle-bar',
+    onClick: () => set({sidebarCollapsed: !S.sidebarCollapsed})
+  },
+    h('div', {class: 'sb-toggle-label'},
+      h('span', {}, sbOpen ? '▼ Réduire le menu' : '▶ Afficher le menu'),
+      session && S.packingList && S.packingList.length > 0
+        ? h('span', {style: 'font-size:11px;color:var(--green);background:var(--green-light);padding:1px 8px;border-radius:10px;font-weight:500'},
+            '📋 ' + S.packingList.length + ' réfs · ' + S.packingList.reduce((a,p)=>a+(p.attendu||0),0) + ' art.')
+        : h('span', {style: 'font-size:11px;color:var(--muted)'}, 'Pas de packing list')
+    ),
+    h('span', {class: 'sb-toggle-chevron' + (sbOpen ? ' open' : '')}, '▲')
+  );
+
+  // Barre d'actions fixe en bas (mobile seulement)
+  const mobileBottomBar = session ? h('div', {class: 'mobile-bottom-bar'},
+    h('button', {class: 'btn btn-sm', style: 'flex:1;background:#1d4ed8;color:#fff;border-color:#1d4ed8;min-height:38px',
+      onClick: () => set({mPacking: true})}, '📋 Packing list'),
+    h('button', {class: 'btn btn-sm', style: 'flex:1;background:#7c3aed;color:#fff;border-color:#7c3aed;min-height:38px',
+      onClick: () => set({mConfirmClose: true, closeOption: 'pause'})}, '⏸ Pause'),
+    h('button', {class: 'btn btn-sm', style: 'flex:1;background:#dc2626;color:#fff;border-color:#dc2626;min-height:38px',
+      onClick: () => set({mConfirmClose: true})}, '■ Terminer')
+  ) : null;
+
+  const sidebar = h('div', {class: 'scanner-sidebar ' + (session ? (sbOpen ? 'sb-open' : 'sb-closed') : 'sb-open')},
     h('div', {class: 'sb-section'},
       h('div', {class: 'sb-label'}, 'Mode de session'),
       h('div', {class: 'mode-grid'},
@@ -1621,7 +1649,11 @@ function renderScanner() {
     )
   );
 
-  return h('div', {class: 'page'}, h('div', {class: 'scanner-wrap'}, sidebar, main));
+  return h('div', {class: 'page', style: 'flex-direction:column'},
+    sbToggleBar,
+    h('div', {class: 'scanner-wrap', style: 'flex:1;overflow:hidden'}, sidebar, main),
+    mobileBottomBar
+  );
 }
 
 
@@ -2964,26 +2996,6 @@ function render() {
   [renderModalConfirmClose(), renderModalPacking(), renderModalDefect(), renderModalEditScan(), renderModalEditSessionName(), renderModalEditSessionScan(), renderModalEditSessionNote(), renderModalSessPL(), renderModalNewFolder(), renderModalAddToFolder(), renderModalAddProd(), renderModalCsv()]
     .filter(Boolean).forEach(m => app.appendChild(m));
   if (S.page === 'scanner' && S.session) setTimeout(() => document.getElementById('scanInput')?.focus(), 50);
-  // Bouton flottant packing list sur mobile
-  if (S.page === 'scanner' && S.session) {
-    const existing = document.getElementById('mobile-pl-fab');
-    if (!existing) {
-      const fab = h('button', {
-        id: 'mobile-pl-fab',
-        style: 'display:none;position:fixed;bottom:20px;right:16px;z-index:999;background:var(--acc);color:#fff;border:none;border-radius:50px;padding:10px 16px;font-size:13px;font-weight:600;box-shadow:0 4px 12px rgba(0,0,0,.3);cursor:pointer',
-        onClick: () => set({mPacking: true})
-      }, '📋 Packing List');
-      document.body.appendChild(fab);
-      // Afficher uniquement sur mobile
-      if (window.innerWidth <= 768) fab.style.display = 'flex';
-      window.addEventListener('resize', () => {
-        fab.style.display = window.innerWidth <= 768 ? 'flex' : 'none';
-      }, {once: false});
-    }
-  } else {
-    const fab = document.getElementById('mobile-pl-fab');
-    if (fab) fab.remove();
-  }
   // Restaurer les positions de scroll après reconstruction
   requestAnimationFrame(() => {
     Object.entries(scrollSave).forEach(([sel, pos]) => {
