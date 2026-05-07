@@ -2958,9 +2958,15 @@ function renderModalSessPL() {
             });
           }
           if (!window._sessPLItems.length) return;
-          try { localStorage.setItem(key, JSON.stringify(window._sessPLItems)); } catch(e) {}
+          const plToSave = [...window._sessPLItems];
+          try { localStorage.setItem(key, JSON.stringify(plToSave)); } catch(e) {}
+          // Si c'est la session active en scanner, mettre à jour S.packingList aussi
+          if (S.session && String(S.session.id) === String(sessionId)) {
+            S.packingList = plToSave;
+          }
           window._sessPLItems = null;
-          set({mSessPL: null, expandedSession: S.expandedSession});
+          // Forcer re-render complet pour mettre à jour le visuel
+          set({mSessPL: null, expandedSession: sessionId});
         }}, '✓ Enregistrer')
       )
     )
