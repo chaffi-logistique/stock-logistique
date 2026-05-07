@@ -589,10 +589,89 @@ async function exportExcelFolder(folder) {
   wb.creator = 'Stock-Logistique';
   wb.created = new Date();
 
-  // Ajouter chaque session — charger la PL depuis localStorage pour chacune
+  // ── Feuille TOTAL du dossier (comme l'image) ──
+  const wsTot = wb.addWorksheet('TOTAL', {views:[{showGridLines:false}]});
+  wsTot.columns = [{width:20},{width:20},{width:20}];
+
+  // Calculer totaux sur toutes les sessions
+  let grandAttendu = 0, grandRecu = 0;
+  const sessionsPL = [];
   for (const s of sessions) {
     let pl = [];
     try { const raw = localStorage.getItem('pl_' + s.id); if (raw) pl = JSON.parse(raw); } catch(e) {}
+    const scans = (s.scans||[]).filter(sc => (sc.qty_pos||0) > 0 || (sc.qty_neg||0) > 0);
+    const att = pl.reduce((a,p) => a+(p.attendu||0), 0);
+    const rec = scans.reduce((a,sc) => a+(sc.qty_pos||0), 0);
+    grandAttendu += att;
+    grandRecu += rec;
+    sessionsPL.push({s, pl, att, rec});
+  }
+
+  // Ligne vide
+  wsTot.addRow([]);
+
+  // Titre dossier
+  const titreRow = wsTot.addRow(['', folder.nom.toUpperCase()]);
+  wsTot.mergeCells(titreRow.number, 2, titreRow.number, 3);
+  titreRow.height = 28;
+  titreRow.getCell(2).fill = {type:'pattern',pattern:'solid',fgColor:{argb:'FF1e3a5f'}};
+  titreRow.getCell(2).font = {color:{argb:'FFFFFFFF'},bold:true,size:14,name:'Calibri'};
+  titreRow.getCell(2).alignment = {horizontal:'center',vertical:'middle'};
+
+  wsTot.addRow([]);
+
+  // En-têtes ATTENDU / RECU
+  const hdrRow = wsTot.addRow(['', 'ATTENDU', 'RECU']);
+  hdrRow.height = 22;
+  ['D','E','F'].forEach((c,i) => {
+    const cell = hdrRow.getCell(i+2);
+    cell.fill = {type:'pattern',pattern:'solid',fgColor:{argb:'FFdde3f0'}};
+    cell.font = {color:{argb:'FF1e3a5f'},bold:true,size:12,name:'Calibri'};
+    cell.alignment = {horizontal:'center',vertical:'middle'};
+    cell.border = {top:{style:'medium',color:{argb:'FF1e3a5f'}},bottom:{style:'medium',color:{argb:'FF1e3a5f'}},left:{style:'thin',color:{argb:'FF1e3a5f'}},right:{style:'thin',color:{argb:'FF1e3a5f'}}};
+  });
+
+  // Valeurs TOTAL
+  const totRow = wsTot.addRow(['', grandAttendu, grandRecu]);
+  totRow.height = 40;
+  const bgAtt = 'FFe2efda', bgRec = grandRecu >= grandAttendu ? 'FFe2efda' : 'FFffc7ce';
+  totRow.getCell(2).fill = {type:'pattern',pattern:'solid',fgColor:{argb:bgAtt}};
+  totRow.getCell(2).font = {color:{argb:'FF276221'},bold:true,size:22,name:'Calibri'};
+  totRow.getCell(2).alignment = {horizontal:'center',vertical:'middle'};
+  totRow.getCell(2).border = {top:{style:'thin'},bottom:{style:'medium'},left:{style:'medium'},right:{style:'thin'}};
+  totRow.getCell(3).fill = {type:'pattern',pattern:'solid',fgColor:{argb:bgRec}};
+  totRow.getCell(3).font = {color:{argb: grandRecu >= grandAttendu ? 'FF276221':'FF9c0006'},bold:true,size:22,name:'Calibri'};
+  totRow.getCell(3).alignment = {horizontal:'center',vertical:'middle'};
+  totRow.getCell(3).border = {top:{style:'thin'},bottom:{style:'medium'},left:{style:'thin'},right:{style:'medium'}};
+
+  wsTot.addRow([]);
+  wsTot.addRow([]);
+
+  // Détail par session
+  const detHdr = wsTot.addRow(['', 'Session', 'Attendu', 'Reçu']);
+  detHdr.height = 18;
+  [2,3,4].forEach(c => {
+    detHdr.getCell(c).fill = {type:'pattern',pattern:'solid',fgColor:{argb:'FFf1f5f9'}};
+    detHdr.getCell(c).font = {color:{argb:'FF1e3a5f'},bold:true,size:11,name:'Calibri'};
+    detHdr.getCell(c).border = {top:{style:'thin',color:{argb:'FF1e3a5f'}},bottom:{style:'thin',color:{argb:'FF1e3a5f'}},left:{style:'thin',color:{argb:'FF1e3a5f'}},right:{style:'thin',color:{argb:'FF1e3a5f'}}};
+    detHdr.getCell(c).alignment = {horizontal:'center',vertical:'middle'};
+  });
+
+  sessionsPL.forEach(({s, att, rec}) => {
+    const dRow = wsTot.addRow(['', s.nom, att, rec]);
+    dRow.height = 18;
+    const bg = rec >= att ? 'FFe2efda' : 'FFfff5f5';
+    const fg = rec >= att ? 'FF276221' : 'FF9c0006';
+    [2,3,4].forEach((c,i) => {
+      dRow.getCell(c).fill = {type:'pattern',pattern:'solid',fgColor:{argb:'FFf8fafc'}};
+      dRow.getCell(c).font = {color:{argb: i>0?fg:'FF334155'},size:11,name:'Calibri',bold:i>0};
+      dRow.getCell(c).border = {top:{style:'thin',color:{argb:'FFe2e8f0'}},bottom:{style:'thin',color:{argb:'FFe2e8f0'}},left:{style:'thin',color:{argb:'FFe2e8f0'}},right:{style:'thin',color:{argb:'FFe2e8f0'}}};
+      dRow.getCell(c).alignment = {horizontal:i===0?'left':'center',vertical:'middle'};
+    });
+  });
+
+  // ── Ajouter chaque session (même design qu'export individuel) ──
+  for (const {s, pl} of sessionsPL) {
     const _prefix = s.nom.replace(/[^a-zA-Z0-9 _]/g,'').trim().substring(0,25) || ('Sess'+String(s.id).substring(0,6));
     await addSessionToWorkbook(wb, s, s.scans || [], pl, _prefix);
   }
