@@ -1,0 +1,12 @@
+name: Keep Supabase alive
+on:
+  schedule:
+    - cron: '0 9 * * 1,4'
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          curl -X GET "https://vmpcpuexszmlalezheep.supabase.co/rest/v1/sessions?limit=1" \
+          -H "apikey: sb_publishable_3cIIsB3hvU4fEnT1WrUShQ_V4-xV0Eo"
+        
